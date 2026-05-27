@@ -112,6 +112,7 @@ impl Queue {
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn with<R>(f: impl FnOnce(&Self) -> R) -> R {
         use once_cell::unsync::Lazy;
 
@@ -127,5 +128,13 @@ impl Queue {
         static QUEUE: Wrapper<Queue> = Wrapper(Lazy::new(Queue::new));
 
         f(&QUEUE.0)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn with<R>(f: impl FnOnce(&Self) -> R) -> R {
+        static QUEUE: wasm_bindgen::JsThreadLocal<Queue> =
+            wasm_bindgen::JsThreadLocal::new(Queue::new, 0);
+
+        QUEUE.with(f)
     }
 }
