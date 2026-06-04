@@ -32,6 +32,10 @@
 
 ### Fixed
 
+* Removed invalid `js_sys::JsString` to `char` upcasts. A JavaScript string does
+  not statically prove it contains exactly one Unicode scalar value; use
+  `JsString::as_char` for checked conversion instead.
+
 * Fixed WASI targets (`wasm32-wasip1`/`wasm32-wasip2`) emitting unresolved
   `__wbindgen_placeholder__` imports, which broke component linking. The
   codegen and runtime gates now exclude `target_os = "wasi"` (restoring the
