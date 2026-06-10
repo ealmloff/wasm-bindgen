@@ -100,6 +100,8 @@ exclude = [
   # Compiles only without -Cpanic=unwind; checked both ways by the
   # `test-wasm-bindgen-unwind-compile-fail` justfile recipe.
   "tests/unwind-compile-fail",
+  # Temporarily vendored, patched copy — see vendor/serde-wasm-bindgen/README.vendored.md
+  "vendor/serde-wasm-bindgen",
 ]
 members = [
   "benchmarks",
@@ -151,6 +153,9 @@ resolver = "2"
 
 [patch.crates-io]
 js-sys = { path = 'crates/js-sys' }
+# Temporary: published serde-wasm-bindgen (<= 0.6.5) uses the removed
+# FromWasmAbi/RefFromWasmAbi traits — see vendor/serde-wasm-bindgen/README.vendored.md
+serde-wasm-bindgen = { path = 'vendor/serde-wasm-bindgen' }
 wasm-bindgen = { path = '.' }
 wasm-bindgen-futures = { path = 'crates/futures' }
 wasm-bindgen-test = { path = 'crates/test' }
