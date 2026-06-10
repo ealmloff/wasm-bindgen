@@ -2751,6 +2751,15 @@ fn extract_first_ty_param(ty: Option<&syn::Type>) -> Result<Option<syn::Type>, D
         .segments
         .last()
         .ok_or_else(|| err_span!(t, "must have at least one segment"))?;
+    // Only a written `Result<..>` is unwrapped syntactically. Anything
+    // else with type arguments is some alias or wrapper whose first
+    // parameter need not be the Ok type (e.g.
+    // `type StringResult<E> = Result<String, E>`) — let it fall through
+    // to the type-system path (`CatchFromWasmAbi`) instead of silently
+    // unwrapping the wrong type.
+    if seg.ident != "Result" {
+        bail_span!(t, "must be Result<...>");
+    }
     let generics = match seg.arguments {
         syn::PathArguments::AngleBracketed(ref t) => t,
         _ => bail_span!(t, "must be Result<...>"),
