@@ -5,11 +5,45 @@
 
 ### Added
 
+* Type aliases are now supported in `#[wasm_bindgen]` export argument
+  position and ordinary `catch` import return position. These conversions
+  are resolved through new type-system traits (`convert::ArgAbi<Scope>`
+  and `convert::CatchFromWasmAbi`) instead of the macro matching on the
+  written type syntax, so e.g. `type Bytes<'a> = &'a [u8];` or
+  `type Fallible = Result<JsValue, JsValue>;` behave identically to their
+  expansions. `catch` constructors and `catch` import returns that mention
+  the import function's own generic or lifetime params still require a
+  literal `Result<...>` return type.
+
 ### Changed
+
+* Unwind-safety of export arguments is now enforced via
+  `MaybeUnwindSafe`/`MaybeRefUnwindSafe` marker bounds on the `ArgAbi`
+  impls rather than `ensure_unwind_safe` assertions in generated code; the
+  requirements (and accepted programs) are unchanged, but the error
+  message for a non-unwind-safe argument under `panic = "unwind"` points
+  at the trait bound instead.
 
 ### Fixed
 
 ### Removed
+
+* The internal (`⚠️ Unstable`) per-shape conversion traits
+  `convert::FromWasmAbi`, `convert::OptionFromWasmAbi`,
+  `convert::RefFromWasmAbi`, `convert::RefMutFromWasmAbi`, and
+  `convert::LongRefFromWasmAbi` have been removed. `convert::ArgAbi<Scope>`
+  is the single JS→Rust conversion trait: owned values, references
+  (`CallScoped` for synchronous borrows, `Anchored` for borrows held
+  across `.await` in `async` exports), and `Option`s (one generic
+  `Option<T>` impl, gated on the element's `convert::OptionArgAbi` impl,
+  which carries its in-band `None` encoding) are all impls of it. By-value decode is
+  `<T as ArgAbi<S>>::arg_from_abi(abi)` with `Guard = Option<T>`;
+  borrowing a heap value without freeing its index is
+  `core::mem::ManuallyDrop::new(JsValue::from(...))`-style handling inside
+  the relevant impl. Notably this breaks published `serde-wasm-bindgen`
+  (≤ 0.6.5), which uses `RefFromWasmAbi`; the in-repo `typescript-tests`
+  and `raytrace-parallel` targets that depend on it will not build until a
+  patched `serde-wasm-bindgen` is released.
 
 --------------------------------------------------------------------------------
 

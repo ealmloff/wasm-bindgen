@@ -6,11 +6,13 @@ use core::ptr::NonNull;
 
 use crate::__rt::marker::ErasableGeneric;
 use crate::__rt::{WasmSignedWordRepr, WasmWordRepr};
+use crate::convert::arg::by_value_arg_abi;
 use crate::convert::traits::{WasmAbi, WasmPrimitive};
 use crate::convert::{
-    FromWasmAbi, IntoWasmAbi, LongRefFromWasmAbi, OptionFromWasmAbi, OptionIntoWasmAbi,
-    RefFromWasmAbi, ReturnWasmAbi, TryFromJsValue, UpcastFrom,
+    ArgAbi, IntoWasmAbi, OptionIntoWasmAbi, ReturnWasmAbi, Scope, TryFromJsValue, UpcastFrom,
+    VectorFromWasmAbi,
 };
+use crate::describe::WasmDescribe;
 use crate::sys::Promising;
 use crate::sys::{JsOption, Undefined};
 use crate::{Clamped, JsError, JsValue, UnwrapThrowExt};
@@ -112,12 +114,10 @@ macro_rules! type_wasm_native {
             fn into_abi(self) -> $c { self as $c }
         }
 
-        impl FromWasmAbi for $t {
-            type Abi = $c;
-
-            #[inline]
-            unsafe fn from_abi(js: $c) -> Self { js as $t }
-        }
+        by_value_arg_abi!(
+            impl ArgAbi for $t { type Abi = $c; |js| js as $t }
+            with Option (type OptionAbi = Option<$c>; |js| js.map(|v: $c| v as $t))
+        );
 
         impl IntoWasmAbi for Option<$t> {
             type Abi = Option<$c>;
@@ -125,15 +125,6 @@ macro_rules! type_wasm_native {
             #[inline]
             fn into_abi(self) -> Self::Abi {
                 self.map(|v| v as $c)
-            }
-        }
-
-        impl FromWasmAbi for Option<$t> {
-            type Abi = Option<$c>;
-
-            #[inline]
-            unsafe fn from_abi(js: Self::Abi) -> Self {
-                js.map(|v: $c| v as $t)
             }
         }
 
@@ -176,12 +167,14 @@ macro_rules! type_wasm_native_f64_option {
             fn into_abi(self) -> $c { self as $c }
         }
 
-        impl FromWasmAbi for $t {
-            type Abi = $c;
-
-            #[inline]
-            unsafe fn from_abi(js: $c) -> Self { js as $t }
-        }
+        by_value_arg_abi!(
+            impl ArgAbi for $t { type Abi = $c; |js| js as $t }
+            with Option (type OptionAbi = f64; |js| if js == F64_ABI_OPTION_SENTINEL {
+                None
+            } else {
+                Some(js as $c as $t)
+            })
+        );
 
         unsafe impl ErasableGeneric for $t {
             type Repr = $t;
@@ -200,18 +193,6 @@ macro_rules! type_wasm_native_f64_option {
             }
         }
 
-        impl FromWasmAbi for Option<$t> {
-            type Abi = f64;
-
-            #[inline]
-            unsafe fn from_abi(js: Self::Abi) -> Self {
-                if js == F64_ABI_OPTION_SENTINEL {
-                    None
-                } else {
-                    Some(js as $c as $t)
-                }
-            }
-        }
 
         impl UpcastFrom<$t> for JsValue {}
         impl UpcastFrom<$t> for JsOption<JsValue> {}
@@ -279,21 +260,14 @@ macro_rules! type_abi_as_u32 {
             fn into_abi(self) -> u32 { self as u32 }
         }
 
-        impl FromWasmAbi for $t {
-            type Abi = u32;
-
-            #[inline]
-            unsafe fn from_abi(js: u32) -> Self { js as $t }
-        }
+        by_value_arg_abi!(
+            impl ArgAbi for $t { type Abi = u32; |js| js as $t }
+            with Option (is_none = js == U32_ABI_OPTION_SENTINEL)
+        );
 
         impl OptionIntoWasmAbi for $t {
             #[inline]
             fn none() -> u32 { U32_ABI_OPTION_SENTINEL }
-        }
-
-        impl OptionFromWasmAbi for $t {
-            #[inline]
-            fn is_none(js: &u32) -> bool { *js == U32_ABI_OPTION_SENTINEL }
         }
 
         unsafe impl ErasableGeneric for $t {
@@ -353,26 +327,15 @@ impl IntoWasmAbi for bool {
     }
 }
 
-impl FromWasmAbi for bool {
-    type Abi = u32;
-
-    #[inline]
-    unsafe fn from_abi(js: u32) -> bool {
-        js != 0
-    }
-}
+by_value_arg_abi!(
+    impl ArgAbi for bool { type Abi = u32; |js| js != 0 }
+    with Option (is_none = js == U32_ABI_OPTION_SENTINEL)
+);
 
 impl OptionIntoWasmAbi for bool {
     #[inline]
     fn none() -> u32 {
         U32_ABI_OPTION_SENTINEL
-    }
-}
-
-impl OptionFromWasmAbi for bool {
-    #[inline]
-    fn is_none(js: &u32) -> bool {
-        *js == U32_ABI_OPTION_SENTINEL
     }
 }
 
@@ -397,27 +360,16 @@ impl IntoWasmAbi for char {
     }
 }
 
-impl FromWasmAbi for char {
-    type Abi = u32;
-
-    #[inline]
-    unsafe fn from_abi(js: u32) -> char {
-        // SAFETY: Checked in bindings.
-        char::from_u32_unchecked(js)
-    }
-}
+by_value_arg_abi!(
+    // SAFETY of the decode: checked in bindings.
+    impl ArgAbi for char { type Abi = u32; |js| char::from_u32_unchecked(js) }
+    with Option (is_none = js == U32_ABI_OPTION_SENTINEL)
+);
 
 impl OptionIntoWasmAbi for char {
     #[inline]
     fn none() -> u32 {
         U32_ABI_OPTION_SENTINEL
-    }
-}
-
-impl OptionFromWasmAbi for char {
-    #[inline]
-    fn is_none(js: &u32) -> bool {
-        *js == U32_ABI_OPTION_SENTINEL
     }
 }
 
@@ -439,15 +391,6 @@ impl<T> IntoWasmAbi for *const T {
     #[inline]
     fn into_abi(self) -> Self::Abi {
         self as usize as WasmWordRepr
-    }
-}
-
-impl<T> FromWasmAbi for *const T {
-    type Abi = WasmWordRepr;
-
-    #[inline]
-    unsafe fn from_abi(js: Self::Abi) -> *const T {
-        js as usize as *const T
     }
 }
 
@@ -475,18 +418,10 @@ unsafe impl<T: ErasableGeneric> ErasableGeneric for Option<T> {
 impl<T, Target> UpcastFrom<Option<T>> for Option<Target> where Target: UpcastFrom<T> {}
 impl<T, Target> UpcastFrom<Option<T>> for JsOption<Option<Target>> where Target: UpcastFrom<T> {}
 
-impl<T> FromWasmAbi for Option<*const T> {
-    type Abi = f64;
-
-    #[inline]
-    unsafe fn from_abi(js: Self::Abi) -> Option<*const T> {
-        if js == F64_ABI_OPTION_SENTINEL {
-            None
-        } else {
-            Some(js as usize as *const T)
-        }
-    }
-}
+by_value_arg_abi!(
+    impl<T> ArgAbi for *const T { type Abi = WasmWordRepr; |js| js as usize as *const T }
+    with Option (type OptionAbi = f64; is_none = js == F64_ABI_OPTION_SENTINEL)
+);
 
 impl<T> IntoWasmAbi for *mut T {
     type Abi = WasmWordRepr;
@@ -494,15 +429,6 @@ impl<T> IntoWasmAbi for *mut T {
     #[inline]
     fn into_abi(self) -> Self::Abi {
         self as usize as WasmWordRepr
-    }
-}
-
-impl<T> FromWasmAbi for *mut T {
-    type Abi = WasmWordRepr;
-
-    #[inline]
-    unsafe fn from_abi(js: Self::Abi) -> *mut T {
-        js as usize as *mut T
     }
 }
 
@@ -516,18 +442,10 @@ impl<T> IntoWasmAbi for Option<*mut T> {
     }
 }
 
-impl<T> FromWasmAbi for Option<*mut T> {
-    type Abi = f64;
-
-    #[inline]
-    unsafe fn from_abi(js: Self::Abi) -> Option<*mut T> {
-        if js == F64_ABI_OPTION_SENTINEL {
-            None
-        } else {
-            Some(js as usize as *mut T)
-        }
-    }
-}
+by_value_arg_abi!(
+    impl<T> ArgAbi for *mut T { type Abi = WasmWordRepr; |js| js as usize as *mut T }
+    with Option (type OptionAbi = f64; is_none = js == F64_ABI_OPTION_SENTINEL)
+);
 
 impl<T> IntoWasmAbi for NonNull<T> {
     type Abi = WasmWordRepr;
@@ -545,22 +463,11 @@ impl<T> OptionIntoWasmAbi for NonNull<T> {
     }
 }
 
-impl<T> FromWasmAbi for NonNull<T> {
-    type Abi = WasmWordRepr;
-
-    #[inline]
-    unsafe fn from_abi(js: Self::Abi) -> Self {
-        // SAFETY: Checked in bindings.
-        NonNull::new_unchecked(js as usize as *mut T)
-    }
-}
-
-impl<T> OptionFromWasmAbi for NonNull<T> {
-    #[inline]
-    fn is_none(js: &Self::Abi) -> bool {
-        *js == 0 as WasmWordRepr
-    }
-}
+by_value_arg_abi!(
+    // SAFETY of the decode: checked in bindings.
+    impl<T> ArgAbi for NonNull<T> { type Abi = WasmWordRepr; |js| NonNull::new_unchecked(js as usize as *mut T) }
+    with Option (type OptionAbi = WasmWordRepr; |js| NonNull::new(js as usize as *mut T))
+);
 
 impl IntoWasmAbi for JsValue {
     type Abi = u32;
@@ -573,41 +480,12 @@ impl IntoWasmAbi for JsValue {
     }
 }
 
-impl FromWasmAbi for JsValue {
-    type Abi = u32;
-
-    #[inline]
-    unsafe fn from_abi(js: u32) -> JsValue {
-        JsValue::_new(js)
-    }
-}
-
 impl IntoWasmAbi for &JsValue {
     type Abi = u32;
 
     #[inline]
     fn into_abi(self) -> u32 {
         self.idx
-    }
-}
-
-impl RefFromWasmAbi for JsValue {
-    type Abi = u32;
-    type Anchor = ManuallyDrop<JsValue>;
-
-    #[inline]
-    unsafe fn ref_from_abi(js: u32) -> Self::Anchor {
-        ManuallyDrop::new(JsValue::_new(js))
-    }
-}
-
-impl LongRefFromWasmAbi for JsValue {
-    type Abi = u32;
-    type Anchor = JsValue;
-
-    #[inline]
-    unsafe fn long_ref_from_abi(js: u32) -> Self::Anchor {
-        Self::from_abi(js)
     }
 }
 
@@ -625,12 +503,12 @@ impl OptionIntoWasmAbi for &JsValue {
     }
 }
 
-impl OptionFromWasmAbi for JsValue {
-    #[inline]
-    fn is_none(js: &u32) -> bool {
-        unsafe { Self::ref_from_abi(*js) }.is_undefined()
-    }
-}
+by_value_arg_abi!(
+    // The `None` peek borrows the heap value without freeing the index
+    // (`ManuallyDrop`); on the `Some` path the decode takes ownership.
+    impl ArgAbi for JsValue { type Abi = u32; |js| JsValue::_new(js) }
+    with Option (is_none = ManuallyDrop::new(JsValue::_new(js)).is_undefined())
+);
 
 impl<T: OptionIntoWasmAbi> IntoWasmAbi for Option<T> {
     type Abi = T::Abi;
@@ -640,19 +518,6 @@ impl<T: OptionIntoWasmAbi> IntoWasmAbi for Option<T> {
         match self {
             None => T::none(),
             Some(me) => me.into_abi(),
-        }
-    }
-}
-
-impl<T: OptionFromWasmAbi> FromWasmAbi for Option<T> {
-    type Abi = T::Abi;
-
-    #[inline]
-    unsafe fn from_abi(js: T::Abi) -> Self {
-        if T::is_none(&js) {
-            None
-        } else {
-            Some(T::from_abi(js))
         }
     }
 }
@@ -670,12 +535,22 @@ impl<T: IntoWasmAbi> IntoWasmAbi for Clamped<T> {
     }
 }
 
-impl<T: FromWasmAbi> FromWasmAbi for Clamped<T> {
-    type Abi = T::Abi;
+impl<WbgS: Scope, T> ArgAbi<WbgS> for Clamped<T>
+where
+    T: ArgAbi<WbgS, Guard = Option<T>> + WasmDescribe,
+    Clamped<T>: crate::__rt::marker::MaybeUnwindSafe,
+{
+    type Abi = <T as ArgAbi<WbgS>>::Abi;
+    type Guard = Option<Clamped<T>>;
 
-    #[inline]
-    unsafe fn from_abi(js: T::Abi) -> Self {
-        Clamped(T::from_abi(js))
+    #[inline(always)]
+    unsafe fn arg_from_abi(js: Self::Abi) -> Self::Guard {
+        Some(Clamped(<T as ArgAbi<WbgS>>::arg_from_abi(js).unwrap()))
+    }
+
+    #[cfg_attr(wasm_bindgen_unstable_test_coverage, coverage(off))]
+    fn describe_arg() {
+        <Clamped<T> as WasmDescribe>::describe();
     }
 }
 
@@ -688,12 +563,7 @@ impl IntoWasmAbi for () {
     }
 }
 
-impl FromWasmAbi for () {
-    type Abi = ();
-
-    #[inline]
-    unsafe fn from_abi(_js: ()) {}
-}
+by_value_arg_abi!(impl ArgAbi for () { type Abi = (); |js| js });
 
 impl Promising for () {
     type Resolution = Undefined;
@@ -791,17 +661,12 @@ impl IntoWasmAbi for JsError {
     }
 }
 
-// `JsError` is `#[repr(transparent)]` over `JsValue`
-impl FromWasmAbi for JsError {
-    type Abi = <JsValue as FromWasmAbi>::Abi;
-
-    #[inline]
-    unsafe fn from_abi(js: Self::Abi) -> Self {
-        JsError {
-            value: JsValue::from_abi(js),
-        }
+by_value_arg_abi!(impl ArgAbi for JsError {
+    type Abi = u32;
+    |js| JsError {
+        value: JsValue::_new(js),
     }
-}
+});
 
 impl Promising for JsError {
     type Resolution = JsError;
@@ -832,9 +697,9 @@ pub fn js_value_vector_into_abi<T: Into<JsValue>>(
 /// stability guarantees** are provided. Use at your own risk. See its
 /// documentation for more details.
 pub unsafe fn js_value_vector_from_abi<T: TryFromJsValue>(
-    js: <Box<[JsValue]> as FromWasmAbi>::Abi,
+    js: <JsValue as VectorFromWasmAbi>::Abi,
 ) -> Box<[T]> {
-    let js_vals = <Vec<JsValue> as FromWasmAbi>::from_abi(js);
+    let js_vals = Vec::from(<JsValue as VectorFromWasmAbi>::vector_from_abi(js));
 
     let mut result = Vec::with_capacity(js_vals.len());
     for value in js_vals {

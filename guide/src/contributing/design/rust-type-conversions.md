@@ -70,44 +70,49 @@ Rust arguments of JS functions imported to Rust.
 
 ## From JS to Rust
 
-Unfortunately the opposite direction from above, going from JS to Rust, is a bit
-more complicated. Here we've got three traits:
+Going from JS to Rust, every value an exported function receives is
+converted through a single trait:
 
 ```rust
-pub trait FromWasmAbi: WasmDescribe {
+pub trait ArgAbi<S: Scope> {
     type Abi: WasmAbi;
-    unsafe fn from_abi(js: Self::Abi) -> Self;
+    type Guard;
+    type Projected<'a> where Self: 'a;
+    unsafe fn arg_from_abi(abi: Self::Abi) -> Self::Guard;
+    fn project<'a>(guard: &'a mut Self::Guard) -> Self::Projected<'a> where Self: 'a;
+    fn describe_arg();
 }
 
-pub trait RefFromWasmAbi: WasmDescribe {
-    type Abi: WasmAbi;
-    type Anchor: Deref<Target=Self>;
-    unsafe fn ref_from_abi(js: Self::Abi) -> Self::Anchor;
-}
-
-pub trait RefMutFromWasmAbi: WasmDescribe {
-    type Abi: WasmAbi;
-    type Anchor: DerefMut<Target=Self>;
-    unsafe fn ref_mut_from_abi(js: Self::Abi) -> Self::Anchor;
+pub trait OptionArgAbi<S: Scope>: Sized {
+    type OptionAbi: WasmAbi;
+    unsafe fn option_arg_from_abi(abi: Self::OptionAbi) -> Option<Self>;
 }
 ```
 
-The `FromWasmAbi` is relatively straightforward, basically the opposite of
-`IntoWasmAbi`. It takes the ABI argument (typically the same as
-`IntoWasmAbi::Abi`) to produce an instance of
-`Self`. This trait is implemented primarily for types that *don't* have internal
-lifetimes or are references.
+`ArgAbi<S>` is dispatched on the *written* argument type — which is what
+makes type aliases work, since trait resolution sees through aliases where
+the macro's view of the syntax cannot. Owned values, references, and
+`Option`s are all plain impls of this one trait:
 
-The latter two traits here are mostly the same, and are intended for generating
-references (both shared and mutable references). They look almost the same as
-`FromWasmAbi` except that they return an `Anchor` type which implements a
-`Deref` trait rather than `Self`.
+* **Owned types** (primitives, `String`, `Vec<T>`, `JsValue`, exported
+  structs and enums by value, …) use the decoded value itself as the
+  `Guard` and hand it over in `project`.
+* **References** like `&str`, `&[u8]`, `&mut [u8]`, `&JsValue`, and
+  `&ExportedStruct` decode into an owning `Guard` (e.g. `Box<str>`, a
+  reference-counted class anchor) and project a borrow of it; the
+  generated code drops guards once the call — or, for `async` exports,
+  the returned future — completes. The `Scope` parameter distinguishes
+  those two cases: `CallScoped` borrows live for one synchronous call,
+  while `Anchored` guards own their data so projections can live across
+  `.await` points.
+* **`Option<T>`** is a single generic impl gated on `T: OptionArgAbi<S>`:
+  the orphan rules prevent downstream crates from implementing anything
+  for `Option<TheirType>`, so the `None` encoding is a capability of the
+  *element* — `#[wasm_bindgen]` emits the `OptionArgAbi` impl alongside
+  the type, and types without an `Option` encoding simply don't implement
+  it.
 
-The `Ref*` traits allow having arguments in functions that are references rather
-than bare types, for example `&str`, `&JsValue`, or `&[u8]`. The `Anchor` here
-is required to ensure that the lifetimes don't persist beyond one function call
-and remain anonymous.
-
-The `From*` family of traits are used for converting the Rust arguments in Rust
-exported functions to JS. They are also used for the return value in JS
-functions imported into Rust.
+Imported functions' return values and the `Ok` side of
+`#[wasm_bindgen(catch)]` results use the by-value case of the same trait
+(`Guard = Option<Self>`), the latter via `CatchFromWasmAbi`, which checks
+the thread-local exception state before converting.

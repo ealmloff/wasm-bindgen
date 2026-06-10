@@ -45,7 +45,8 @@ use futures_util::FutureExt;
 use wasm_bindgen::__rt::marker::ErasableGeneric;
 #[cfg(all(target_family = "wasm", feature = "std", panic = "unwind"))]
 use wasm_bindgen::__rt::panic_to_panic_error;
-use wasm_bindgen::convert::{FromWasmAbi, Upcast};
+use wasm_bindgen::convert::{ArgAbi, CallScoped, Upcast};
+use wasm_bindgen::describe::WasmDescribe;
 use wasm_bindgen::sys::Promising;
 use wasm_bindgen::{prelude::*, JsError, JsGeneric};
 
@@ -127,11 +128,13 @@ impl<T> fmt::Debug for JsFuture<T> {
     }
 }
 
-// `FromWasmAbi` is what the closure shim invokes on the resolved value;
+// `ArgAbi` is what the closure shim invokes on the resolved value;
 // no layout equivalence with `JsValue` is required at this seam — the
 // per-type `from_abi` does the conversion (e.g. for dynamic unions it
 // runs the variant dispatcher).
-impl<T: FromWasmAbi + 'static> From<Promise<T>> for JsFuture<T> {
+impl<T: ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe + 'static> From<Promise<T>>
+    for JsFuture<T>
+{
     fn from(js: Promise<T>) -> JsFuture<T> {
         // Use the `then` method to schedule two callbacks, one for the
         // resolved value and one for the rejected value. We're currently
@@ -221,7 +224,7 @@ impl<T> Future for JsFuture<T> {
     }
 }
 
-impl<T: FromWasmAbi + 'static> IntoFuture for Promise<T> {
+impl<T: ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe + 'static> IntoFuture for Promise<T> {
     type Output = Result<T, JsValue>;
     type IntoFuture = JsFuture<T>;
 
@@ -339,7 +342,7 @@ where
 pub fn future_to_promise_typed<T, F>(future: F) -> Promise<<T as Promising>::Resolution>
 where
     F: Future<Output = Result<T, JsValue>> + 'static,
-    T: Promising + FromWasmAbi + JsGeneric,
+    T: Promising + ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe + JsGeneric,
     <T as Promising>::Resolution: JsGeneric,
 {
     let mut future = Some(future);

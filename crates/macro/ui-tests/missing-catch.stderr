@@ -1,55 +1,61 @@
-error[E0277]: the trait bound `Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>: FromWasmAbi` is not satisfied
+error[E0277]: `Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>` is not supported as an argument of an exported function
  --> ui-tests/missing-catch.rs:6:12
   |
 3 | #[wasm_bindgen]
   | --------------- in this procedural macro expansion
 ...
 6 |     pub fn foo() -> Result<JsValue, JsValue>;
-  |            ^^^ the trait `FromWasmAbi` is not implemented for `Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>`
+  |            ^^^ unsupported `#[wasm_bindgen]` argument type
   |
-  = help: the following other types implement trait `FromWasmAbi`:
-            ()
-            *const T
-            *mut T
-            AssertUnwindSafe<T>
-            Box<[T]>
-            Clamped<T>
-            JsError
-            JsOption<T>
+  = help: the trait `ArgAbi<CallScoped>` is not implemented for `Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>`
+  = note: arguments are supported for primitives, owned JS values, `Option`s of supported types, and references like `&str`, slices of supported primitives, `&JsValue`, exported structs, and imported types
+  = help: the following other types implement trait `ArgAbi<S>`:
+            `&JsOption<T>` implements `ArgAbi<Anchored>`
+            `&JsOption<T>` implements `ArgAbi<CallScoped>`
+            `&Undefined` implements `ArgAbi<Anchored>`
+            `&Undefined` implements `ArgAbi<CallScoped>`
+            `&[MaybeUninit<f32>]` implements `ArgAbi<WbgS>`
+            `&[MaybeUninit<f64>]` implements `ArgAbi<WbgS>`
+            `&[MaybeUninit<i16>]` implements `ArgAbi<WbgS>`
+            `&[MaybeUninit<i32>]` implements `ArgAbi<WbgS>`
           and $N others
   = note: this error originates in the attribute macro `wasm_bindgen` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0277]: the trait bound `Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>: FromWasmAbi` is not satisfied
+error[E0277]: `Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>` is not supported as an argument of an exported function
  --> ui-tests/missing-catch.rs:3:1
   |
 3 | #[wasm_bindgen]
-  | ^^^^^^^^^^^^^^^ the trait `FromWasmAbi` is not implemented for `Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>`
+  | ^^^^^^^^^^^^^^^ unsupported `#[wasm_bindgen]` argument type
   |
-  = help: the following other types implement trait `FromWasmAbi`:
-            ()
-            *const T
-            *mut T
-            AssertUnwindSafe<T>
-            Box<[T]>
-            Clamped<T>
-            JsError
-            JsOption<T>
+  = help: the trait `ArgAbi<CallScoped>` is not implemented for `Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>`
+  = note: arguments are supported for primitives, owned JS values, `Option`s of supported types, and references like `&str`, slices of supported primitives, `&JsValue`, exported structs, and imported types
+  = help: the following other types implement trait `ArgAbi<S>`:
+            `&JsOption<T>` implements `ArgAbi<Anchored>`
+            `&JsOption<T>` implements `ArgAbi<CallScoped>`
+            `&Undefined` implements `ArgAbi<Anchored>`
+            `&Undefined` implements `ArgAbi<CallScoped>`
+            `&[MaybeUninit<f32>]` implements `ArgAbi<WbgS>`
+            `&[MaybeUninit<f64>]` implements `ArgAbi<WbgS>`
+            `&[MaybeUninit<i16>]` implements `ArgAbi<WbgS>`
+            `&[MaybeUninit<i32>]` implements `ArgAbi<WbgS>`
           and $N others
   = note: this error originates in the attribute macro `wasm_bindgen` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0277]: the trait bound `Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>: FromWasmAbi` is not satisfied
+error[E0277]: `Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>` is not supported as an argument of an exported function
  --> ui-tests/missing-catch.rs:6:21
   |
 6 |     pub fn foo() -> Result<JsValue, JsValue>;
-  |                     ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `FromWasmAbi` is not implemented for `Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>`
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^ unsupported `#[wasm_bindgen]` argument type
   |
-  = help: the following other types implement trait `FromWasmAbi`:
-            ()
-            *const T
-            *mut T
-            AssertUnwindSafe<T>
-            Box<[T]>
-            Clamped<T>
-            JsError
-            JsOption<T>
+  = help: the trait `ArgAbi<CallScoped>` is not implemented for `Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>`
+  = note: arguments are supported for primitives, owned JS values, `Option`s of supported types, and references like `&str`, slices of supported primitives, `&JsValue`, exported structs, and imported types
+  = help: the following other types implement trait `ArgAbi<S>`:
+            `&JsOption<T>` implements `ArgAbi<Anchored>`
+            `&JsOption<T>` implements `ArgAbi<CallScoped>`
+            `&Undefined` implements `ArgAbi<Anchored>`
+            `&Undefined` implements `ArgAbi<CallScoped>`
+            `&[MaybeUninit<f32>]` implements `ArgAbi<WbgS>`
+            `&[MaybeUninit<f64>]` implements `ArgAbi<WbgS>`
+            `&[MaybeUninit<i16>]` implements `ArgAbi<WbgS>`
+            `&[MaybeUninit<i32>]` implements `ArgAbi<WbgS>`
           and $N others

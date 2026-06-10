@@ -1,0 +1,5 @@
+error: cannot return references in #[wasm_bindgen] imports yet
+  --> ui-tests/invalid-catch-ref.rs:11:15
+   |
+11 |     fn f() -> &u32;
+   |               ^^^^

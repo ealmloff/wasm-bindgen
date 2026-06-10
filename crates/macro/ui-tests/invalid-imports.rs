@@ -28,14 +28,10 @@ extern "C" {
     #[wasm_bindgen(constructor)]
     fn f() -> &Bar;
 
-    #[wasm_bindgen(catch)]
-    fn f() -> u32;
-    #[wasm_bindgen(catch)]
-    fn f() -> &u32;
-    #[wasm_bindgen(catch)]
-    fn f() -> Result;
-    #[wasm_bindgen(catch)]
-    fn f() -> Result<'a>;
+    // Invalid `catch` returns are now rejected by the type system
+    // (`CatchFromWasmAbi`) or by codegen, not the parser; they live in
+    // invalid-catch*.rs because the parser-phase errors in this file
+    // suppress later-phase errors.
 }
 
 fn main() {}

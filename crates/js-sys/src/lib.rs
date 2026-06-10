@@ -47,7 +47,8 @@ use core::str;
 use core::str::FromStr;
 pub use wasm_bindgen;
 use wasm_bindgen::closure::{ScopedClosure, WasmClosure};
-use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi, Upcast, UpcastFrom};
+use wasm_bindgen::convert::{ArgAbi, CallScoped, IntoWasmAbi, Upcast, UpcastFrom};
+use wasm_bindgen::describe::WasmDescribe;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsError;
 
@@ -4868,7 +4869,7 @@ pub trait FunctionIntoClosure: JsFunction {
 
 macro_rules! impl_function_into_closure {
     ( $(($($var:ident)*))* ) => {$(
-        impl<$($var: FromWasmAbi + JsGeneric,)* R: IntoWasmAbi + JsGeneric> FunctionIntoClosure for fn($($var),*) -> R {
+        impl<$($var: ArgAbi<CallScoped, Guard = Option<$var>> + WasmDescribe + JsGeneric,)* R: IntoWasmAbi + JsGeneric> FunctionIntoClosure for fn($($var),*) -> R {
             type ClosureTypeMut = dyn FnMut($($var),*) -> R;
         }
     )*};
@@ -5038,8 +5039,10 @@ extern "C" {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Generator/next)
     #[cfg(js_sys_unstable_apis)]
     #[wasm_bindgen(method, catch, js_name = next)]
-    pub fn next<T: FromWasmAbi>(this: &Generator<T>, value: &T)
-        -> Result<IteratorNext<T>, JsValue>;
+    pub fn next<T: ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe>(
+        this: &Generator<T>,
+        value: &T,
+    ) -> Result<IteratorNext<T>, JsValue>;
 
     // Next major: deprecate
     /// The `next()` method returns an object with two properties done and value.
@@ -5047,7 +5050,7 @@ extern "C" {
     ///
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Generator/next)
     #[wasm_bindgen(method, catch)]
-    pub fn next_iterator<T: FromWasmAbi>(
+    pub fn next_iterator<T: ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe>(
         this: &Generator<T>,
         value: &T,
     ) -> Result<IteratorNext<T>, JsValue>;
@@ -5064,7 +5067,7 @@ extern "C" {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Generator/return)
     #[cfg(js_sys_unstable_apis)]
     #[wasm_bindgen(method, catch, js_name = "return")]
-    pub fn return_<T: FromWasmAbi>(
+    pub fn return_<T: ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe>(
         this: &Generator<T>,
         value: &T,
     ) -> Result<IteratorNext<T>, JsValue>;
@@ -5074,7 +5077,7 @@ extern "C" {
     ///
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Generator/return)
     #[wasm_bindgen(method, catch, js_name = "return")]
-    pub fn try_return<T: FromWasmAbi>(
+    pub fn try_return<T: ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe>(
         this: &Generator<T>,
         value: &T,
     ) -> Result<IteratorNext<T>, JsValue>;
@@ -5093,7 +5096,7 @@ extern "C" {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Generator/throw)
     #[cfg(js_sys_unstable_apis)]
     #[wasm_bindgen(method, catch, js_name = throw)]
-    pub fn throw<T: FromWasmAbi>(
+    pub fn throw<T: ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe>(
         this: &Generator<T>,
         error: &JsValue,
     ) -> Result<IteratorNext<T>, JsValue>;
@@ -5104,13 +5107,13 @@ extern "C" {
     ///
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Generator/throw)
     #[wasm_bindgen(method, catch, js_name = throw)]
-    pub fn throw_value<T: FromWasmAbi>(
+    pub fn throw_value<T: ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe>(
         this: &Generator<T>,
         error: &JsValue,
     ) -> Result<IteratorNext<T>, JsValue>;
 }
 
-impl<T: FromWasmAbi> Iterable for Generator<T> {
+impl<T: ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe> Iterable for Generator<T> {
     type Item = T;
 }
 
@@ -5151,7 +5154,7 @@ extern "C" {
     ) -> Result<Promise<IteratorNext<T>>, JsValue>;
 }
 
-impl<T: FromWasmAbi> AsyncIterable for AsyncGenerator<T> {
+impl<T: ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe> AsyncIterable for AsyncGenerator<T> {
     type Item = T;
 }
 
@@ -5306,7 +5309,9 @@ extern "C" {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map/entries)
     #[cfg(not(js_sys_unstable_apis))]
     #[wasm_bindgen(method)]
-    pub fn entries<K, V: FromWasmAbi>(this: &Map<K, V>) -> Iterator;
+    pub fn entries<K, V: ArgAbi<CallScoped, Guard = Option<V>> + WasmDescribe>(
+        this: &Map<K, V>,
+    ) -> Iterator;
 
     /// The `entries()` method returns a new Iterator object that contains
     /// the [key, value] pairs for each element in the Map object in
@@ -5315,7 +5320,10 @@ extern "C" {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map/entries)
     #[cfg(js_sys_unstable_apis)]
     #[wasm_bindgen(method, js_name = entries)]
-    pub fn entries<K: JsGeneric, V: FromWasmAbi + JsGeneric>(
+    pub fn entries<
+        K: JsGeneric,
+        V: ArgAbi<CallScoped, Guard = Option<V>> + WasmDescribe + JsGeneric,
+    >(
         this: &Map<K, V>,
     ) -> Iterator<ArrayTuple<(K, V)>>;
 
@@ -5326,7 +5334,10 @@ extern "C" {
     ///
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map/entries)
     #[wasm_bindgen(method, js_name = entries)]
-    pub fn entries_typed<K: JsGeneric, V: FromWasmAbi + JsGeneric>(
+    pub fn entries_typed<
+        K: JsGeneric,
+        V: ArgAbi<CallScoped, Guard = Option<V>> + WasmDescribe + JsGeneric,
+    >(
         this: &Map<K, V>,
     ) -> Iterator<ArrayTuple<(K, V)>>;
 
@@ -5335,14 +5346,21 @@ extern "C" {
     ///
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map/keys)
     #[wasm_bindgen(method)]
-    pub fn keys<K: FromWasmAbi, V: FromWasmAbi>(this: &Map<K, V>) -> Iterator<K>;
+    pub fn keys<
+        K: ArgAbi<CallScoped, Guard = Option<K>> + WasmDescribe,
+        V: ArgAbi<CallScoped, Guard = Option<V>> + WasmDescribe,
+    >(
+        this: &Map<K, V>,
+    ) -> Iterator<K>;
 
     /// The `values()` method returns a new Iterator object that contains the
     /// values for each element in the Map object in insertion order.
     ///
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map/values)
     #[wasm_bindgen(method)]
-    pub fn values<K, V: FromWasmAbi>(this: &Map<K, V>) -> Iterator<V>;
+    pub fn values<K, V: ArgAbi<CallScoped, Guard = Option<V>> + WasmDescribe>(
+        this: &Map<K, V>,
+    ) -> Iterator<V>;
 }
 
 impl<K, V> Iterable for Map<K, V> {
@@ -5365,7 +5383,9 @@ extern "C" {
     /// (such as false or undefined), a TypeError ("iterator.next() returned a
     /// non-object value") will be thrown.
     #[wasm_bindgen(catch, method)]
-    pub fn next<T: FromWasmAbi>(this: &Iterator<T>) -> Result<IteratorNext<T>, JsValue>;
+    pub fn next<T: ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe>(
+        this: &Iterator<T>,
+    ) -> Result<IteratorNext<T>, JsValue>;
 }
 
 impl<T> UpcastFrom<Iterator<T>> for Object {}
@@ -5421,7 +5441,7 @@ extern "C" {
     /// returned a non-object value") will be thrown.
     #[cfg(js_sys_unstable_apis)]
     #[wasm_bindgen(catch, method, js_name = next)]
-    pub fn next<T: FromWasmAbi>(
+    pub fn next<T: ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe>(
         this: &AsyncIterator<T>,
     ) -> Result<Promise<IteratorNext<T>>, JsValue>;
 
@@ -5431,7 +5451,7 @@ extern "C" {
     /// gets returned (such as false or undefined), a TypeError ("iterator.next()
     /// returned a non-object value") will be thrown.
     #[wasm_bindgen(catch, method, js_name = next)]
-    pub fn next_iterator<T: FromWasmAbi>(
+    pub fn next_iterator<T: ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe>(
         this: &AsyncIterator<T>,
     ) -> Result<Promise<IteratorNext<T>>, JsValue>;
 }
@@ -5463,7 +5483,9 @@ struct IterState {
     done: bool,
 }
 
-impl<'a, T: FromWasmAbi + JsGeneric> IntoIterator for &'a Iterator<T> {
+impl<'a, T: ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe + JsGeneric> IntoIterator
+    for &'a Iterator<T>
+{
     type Item = Result<T, JsValue>;
     type IntoIter = Iter<'a, T>;
 
@@ -5475,7 +5497,9 @@ impl<'a, T: FromWasmAbi + JsGeneric> IntoIterator for &'a Iterator<T> {
     }
 }
 
-impl<T: FromWasmAbi + JsGeneric> core::iter::Iterator for Iter<'_, T> {
+impl<T: ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe + JsGeneric> core::iter::Iterator
+    for Iter<'_, T>
+{
     type Item = Result<T, JsValue>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -5483,7 +5507,9 @@ impl<T: FromWasmAbi + JsGeneric> core::iter::Iterator for Iter<'_, T> {
     }
 }
 
-impl<T: FromWasmAbi + JsGeneric> IntoIterator for Iterator<T> {
+impl<T: ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe + JsGeneric> IntoIterator
+    for Iterator<T>
+{
     type Item = Result<T, JsValue>;
     type IntoIter = IntoIter<T>;
 
@@ -5495,7 +5521,9 @@ impl<T: FromWasmAbi + JsGeneric> IntoIterator for Iterator<T> {
     }
 }
 
-impl<T: FromWasmAbi + JsGeneric> core::iter::Iterator for IntoIter<T> {
+impl<T: ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe + JsGeneric> core::iter::Iterator
+    for IntoIter<T>
+{
     type Item = Result<T, JsValue>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -5508,7 +5536,10 @@ impl IterState {
         IterState { done: false }
     }
 
-    fn next<T: FromWasmAbi + JsGeneric>(&mut self, js: &Iterator<T>) -> Option<Result<T, JsValue>> {
+    fn next<T: ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe + JsGeneric>(
+        &mut self,
+        js: &Iterator<T>,
+    ) -> Option<Result<T, JsValue>> {
         if self.done {
             return None;
         }
@@ -13086,7 +13117,9 @@ impl<T> PromiseState<T> {
 /// Converts a `PromiseState<T>` into a `Result<T, JsValue>`, matching the
 /// spec invariant that exactly one of the fulfilled value or the rejection
 /// reason is populated per slot.
-impl<T: JsGeneric + FromWasmAbi> From<PromiseState<T>> for Result<T, JsValue> {
+impl<T: JsGeneric + ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe> From<PromiseState<T>>
+    for Result<T, JsValue>
+{
     fn from(state: PromiseState<T>) -> Result<T, JsValue> {
         if state.is_fulfilled() {
             Ok(state.get_value().unwrap())

@@ -11,8 +11,8 @@ use crate::closure::{
 };
 use crate::convert::slices::WasmSlice;
 use crate::convert::traits::UpcastFrom;
-use crate::convert::RefFromWasmAbi;
-use crate::convert::{FromWasmAbi, IntoWasmAbi, ReturnWasmAbi, WasmAbi, WasmRet};
+use crate::convert::{ArgAbi, CallScoped};
+use crate::convert::{IntoWasmAbi, ReturnWasmAbi, WasmAbi, WasmRet};
 use crate::describe::{inform, WasmDescribe, FUNCTION};
 use crate::sys::Undefined;
 use crate::throw_str;
@@ -27,7 +27,10 @@ macro_rules! closures {
 
     // One-arity recurse
     (@process [$($unwind_safe:tt)*] ($($var:ident $arg1:ident $arg2:ident $arg3:ident $arg4:ident)*) $($rest:tt)*) => {
-        closures!(@impl_for_args ($($var),*) FromWasmAbi [$($unwind_safe)*] $($var::from_abi($var) => $var $arg1 $arg2 $arg3 $arg4)*);
+        closures!(@impl_for_args ($($var),*)
+            [$($var: WasmDescribe + ArgAbi<CallScoped, Guard = Option<$var>>,)*]
+            [$($unwind_safe)*]
+            $(<$var as ArgAbi<CallScoped>>::arg_from_abi($var).unwrap() => $var [<$var as ArgAbi<CallScoped>>::Abi] $arg1 $arg2 $arg3 $arg4)*);
         closures!(@process [$($unwind_safe)*] $($rest)*);
     };
 
@@ -50,7 +53,7 @@ macro_rules! closures {
     // while `|var_with_ref_type: &A|` makes it use the higher-order generic as expected.
     (@closure ($($ty:ty),*) $($var:ident)* $body:block) => (move |$($var: $ty),*| $body);
 
-    (@impl_for_fn $is_mut:literal [$($mut:ident)?] $Fn:ident $FnArgs:tt $FromWasmAbi:ident $($var_expr:expr => $var:ident $arg1:ident $arg2:ident $arg3:ident $arg4:ident)*) => (const _: () = {
+    (@impl_for_fn $is_mut:literal [$($mut:ident)?] $Fn:ident $FnArgs:tt [$($bounds:tt)*] $($var_expr:expr => $var:ident [$abi:ty] $arg1:ident $arg2:ident $arg3:ident $arg4:ident)*) => (const _: () = {
         impl<$($var,)* R> IntoWasmAbi for &'_ $($mut)? (dyn $Fn $FnArgs -> R + '_)
         where
             Self: WasmDescribe,
@@ -78,16 +81,19 @@ macro_rules! closures {
         // left to unwind/abort (`false`). When `panic=unwind` is not available,
         // `UNWIND_SAFE` has no effect — panics always abort.
         #[allow(non_snake_case)]
-        unsafe extern "C-unwind" fn invoke<$($var: $FromWasmAbi,)* R: ReturnWasmAbi, const UNWIND_SAFE: bool>(
+        unsafe extern "C-unwind" fn invoke<$($var,)* R: ReturnWasmAbi, const UNWIND_SAFE: bool>(
             a: WasmWord,
             b: WasmWord,
             $(
-            $arg1: <$var::Abi as WasmAbi>::Prim1,
-            $arg2: <$var::Abi as WasmAbi>::Prim2,
-            $arg3: <$var::Abi as WasmAbi>::Prim3,
-            $arg4: <$var::Abi as WasmAbi>::Prim4,
+            $arg1: <$abi as WasmAbi>::Prim1,
+            $arg2: <$abi as WasmAbi>::Prim2,
+            $arg3: <$abi as WasmAbi>::Prim3,
+            $arg4: <$abi as WasmAbi>::Prim4,
             )*
-        ) -> WasmRet<R::Abi> {
+        ) -> WasmRet<R::Abi>
+        where
+            $($bounds)*
+        {
             if a.is_zero() {
                 throw_str("closure invoked recursively or after being dropped");
             }
@@ -95,7 +101,7 @@ macro_rules! closures {
                 let f: & $($mut)? dyn $Fn $FnArgs -> R =
                     mem::transmute((a.into_usize(), b.into_usize()));
                 $(
-                    let $var = $var::Abi::join($arg1, $arg2, $arg3, $arg4);
+                    let $var = <$abi as WasmAbi>::join($arg1, $arg2, $arg3, $arg4);
                 )*
                 if UNWIND_SAFE {
                     maybe_catch_unwind(AssertUnwindSafe(|| f($($var_expr),*)))
@@ -109,7 +115,7 @@ macro_rules! closures {
         #[allow(clippy::fn_to_numeric_cast)]
         impl<$($var,)* R> WasmDescribe for dyn $Fn $FnArgs -> R + '_
         where
-            $($var: $FromWasmAbi,)*
+            $($bounds)*
             R: ReturnWasmAbi,
         {
             #[cfg_attr(wasm_bindgen_unstable_test_coverage, coverage(off))]
@@ -122,7 +128,7 @@ macro_rules! closures {
 
         unsafe impl<'__closure, $($var,)* R> WasmClosure for dyn $Fn $FnArgs -> R + '__closure
         where
-            $($var: $FromWasmAbi,)*
+            $($bounds)*
             R: ReturnWasmAbi,
         {
             const IS_MUT: bool = $is_mut;
@@ -149,26 +155,28 @@ macro_rules! closures {
     // IntoWasmClosureRef is only implemented for Fn, not FnMut.
     // IntoWasmClosureRefMut is implemented for FnMut.
     // Since Fn: FnMut, any Fn closure can be used as FnMut, so this covers all cases.
-    (@impl_unsize_closure_ref $FnArgs:tt $FromWasmAbi:ident $($var_expr:expr => $var:ident $arg1:ident $arg2:ident $arg3:ident $arg4:ident)*) => (
-        impl<'a, T: 'a, $($var: 'a + $FromWasmAbi,)* R: 'a + ReturnWasmAbi> IntoWasmClosureRef<dyn Fn $FnArgs -> R + 'a> for T
+    (@impl_unsize_closure_ref $FnArgs:tt [$($bounds:tt)*] $($var_expr:expr => $var:ident [$abi:ty] $arg1:ident $arg2:ident $arg3:ident $arg4:ident)*) => (
+        impl<'a, T: 'a, $($var: 'a,)* R: 'a + ReturnWasmAbi> IntoWasmClosureRef<dyn Fn $FnArgs -> R + 'a> for T
         where
             T: Fn $FnArgs -> R,
+            $($bounds)*
         {
             fn unsize_closure_ref(&self) -> &(dyn Fn $FnArgs -> R + 'a) { self }
         }
 
-        impl<'a, T: 'a, $($var: 'a + $FromWasmAbi,)* R: 'a + ReturnWasmAbi> IntoWasmClosureRefMut<dyn FnMut $FnArgs -> R + 'a> for T
+        impl<'a, T: 'a, $($var: 'a,)* R: 'a + ReturnWasmAbi> IntoWasmClosureRefMut<dyn FnMut $FnArgs -> R + 'a> for T
         where
             T: FnMut $FnArgs -> R,
+            $($bounds)*
         {
             fn unsize_closure_ref(&mut self) -> &mut (dyn FnMut $FnArgs -> R + 'a) { self }
         }
     );
 
-    (@impl_for_args $FnArgs:tt $FromWasmAbi:ident [$($maybe_unwind_safe:tt)*] $($var_expr:expr => $var:ident $arg1:ident $arg2:ident $arg3:ident $arg4:ident)*) => {
-        closures!(@impl_for_fn false [] Fn $FnArgs $FromWasmAbi $($var_expr => $var $arg1 $arg2 $arg3 $arg4)*);
-        closures!(@impl_for_fn true [mut] FnMut $FnArgs $FromWasmAbi $($var_expr => $var $arg1 $arg2 $arg3 $arg4)*);
-        closures!(@impl_unsize_closure_ref $FnArgs $FromWasmAbi $($var_expr => $var $arg1 $arg2 $arg3 $arg4)*);
+    (@impl_for_args $FnArgs:tt [$($bounds:tt)*] [$($maybe_unwind_safe:tt)*] $($var_expr:expr => $var:ident [$abi:ty] $arg1:ident $arg2:ident $arg3:ident $arg4:ident)*) => {
+        closures!(@impl_for_fn false [] Fn $FnArgs [$($bounds)*] $($var_expr => $var [$abi] $arg1 $arg2 $arg3 $arg4)*);
+        closures!(@impl_for_fn true [mut] FnMut $FnArgs [$($bounds)*] $($var_expr => $var [$abi] $arg1 $arg2 $arg3 $arg4)*);
+        closures!(@impl_unsize_closure_ref $FnArgs [$($bounds)*] $($var_expr => $var [$abi] $arg1 $arg2 $arg3 $arg4)*);
 
         // The memory safety here in these implementations below is a bit tricky. We
         // want to be able to drop the `Closure` object from within the invocation of a
@@ -188,7 +196,8 @@ macro_rules! closures {
         impl<T, $($var,)* R> WasmClosureFnOnce<dyn FnMut $FnArgs -> R, $FnArgs, R> for T
         where
             T: 'static + (FnOnce $FnArgs -> R),
-            $($var: $FromWasmAbi + 'static,)*
+            $($bounds)*
+            $($var: 'static,)*
             R: ReturnWasmAbi + 'static,
             $($maybe_unwind_safe)*
         {
@@ -234,7 +243,8 @@ macro_rules! closures {
         impl<T, $($var,)* R> WasmClosureFnOnceAbort<dyn FnMut $FnArgs -> R, $FnArgs, R> for T
         where
             T: 'static + (FnOnce $FnArgs -> R),
-            $($var: $FromWasmAbi + 'static,)*
+            $($bounds)*
+            $($var: 'static,)*
             R: ReturnWasmAbi + 'static,
         {
             fn into_fn_mut(self) -> Box<dyn FnMut $FnArgs -> R> {
@@ -278,7 +288,10 @@ macro_rules! closures {
     };
 
     ([$($unwind_safe:tt)*] $( ($($var:ident $arg1:ident $arg2:ident $arg3:ident $arg4:ident)*) )*) => ($(
-        closures!(@impl_for_args ($($var),*) FromWasmAbi [$($maybe_unwind_safe)*] $($var::from_abi($var) => $var $arg1 $arg2 $arg3 $arg4)*);
+        closures!(@impl_for_args ($($var),*)
+            [$($var: WasmDescribe + ArgAbi<CallScoped, Guard = Option<$var>>,)*]
+            [$($unwind_safe)*]
+            $(<$var as ArgAbi<CallScoped>>::arg_from_abi($var).unwrap() => $var [<$var as ArgAbi<CallScoped>>::Abi] $arg1 $arg2 $arg3 $arg4)*);
     )*);
 }
 
@@ -484,11 +497,30 @@ impl_fn_upcasts!();
 // We need to allow coherence leak check just for these traits because we're providing separate implementation for `Fn(&A)` variants when `Fn(A)` one already exists.
 #[allow(coherence_leak_check)]
 const _: () = {
+    // The impls are generic over the *pointee* `A`, so they convert
+    // through `&'static A: ArgAbi<CallScoped>` (every reference impl is
+    // lifetime-generic, so 'static loses nothing) and rely on the guard
+    // dereferencing to the pointee — which holds for every reference
+    // guard — to hand `f` a plain `&A`.
     #[cfg(all(feature = "std", target_arch = "wasm32", panic = "unwind"))]
-    closures!(@impl_for_args (&A) RefFromWasmAbi [T: core::panic::UnwindSafe,] &*A::ref_from_abi(A) => A a1 a2 a3 a4);
+    closures!(@impl_for_args (&A)
+        [
+            A: WasmDescribe + 'static,
+            &'static A: ArgAbi<CallScoped>,
+            <&'static A as ArgAbi<CallScoped>>::Guard: core::ops::Deref<Target = A>,
+        ]
+        [T: core::panic::UnwindSafe,]
+        &*<&'static A as ArgAbi<CallScoped>>::arg_from_abi(A) => A [<&'static A as ArgAbi<CallScoped>>::Abi] a1 a2 a3 a4);
 
     #[cfg(not(all(feature = "std", target_arch = "wasm32", panic = "unwind")))]
-    closures!(@impl_for_args (&A) RefFromWasmAbi [] &*A::ref_from_abi(A) => A a1 a2 a3 a4);
+    closures!(@impl_for_args (&A)
+        [
+            A: WasmDescribe + 'static,
+            &'static A: ArgAbi<CallScoped>,
+            <&'static A as ArgAbi<CallScoped>>::Guard: core::ops::Deref<Target = A>,
+        ]
+        []
+        &*<&'static A as ArgAbi<CallScoped>>::arg_from_abi(A) => A [<&'static A as ArgAbi<CallScoped>>::Abi] a1 a2 a3 a4);
 };
 
 // UpcastFrom impl for ScopedClosure.

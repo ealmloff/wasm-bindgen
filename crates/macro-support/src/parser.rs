@@ -941,15 +941,21 @@ impl<'a>
         )?;
         let catch = opts.catch().is_some();
         let variadic = opts.variadic().is_some();
+        let mut catch_unwrapped = false;
         let js_ret = if catch {
-            // TODO: this assumes a whole bunch:
-            //
-            // * The outer type is actually a `Result`
-            // * The error type is a `JsValue`
-            // * The actual type is the first type parameter
-            //
-            // should probably fix this one day...
-            extract_first_ty_param(wasm.ret.as_ref().map(|ret| &ret.r#type))?
+            // Best-effort: a literal `Result<T, _>` return is unwrapped to
+            // `T` syntactically, which the catch-constructor and
+            // generic-return paths require. Anything else (e.g. a type
+            // alias of a Result) keeps the whole written type and is
+            // resolved through `CatchFromWasmAbi` in the type system
+            // instead.
+            match extract_first_ty_param(wasm.ret.as_ref().map(|ret| &ret.r#type)) {
+                Ok(ty) => {
+                    catch_unwrapped = true;
+                    ty
+                }
+                Err(_) => wasm.ret.as_ref().map(|ret| ret.r#type.clone()),
+            }
         } else {
             wasm.ret.as_ref().map(|ret| ret.r#type.clone())
         };
@@ -1020,6 +1026,12 @@ impl<'a>
 
             ast::ImportFunctionKind::Method { class, ty, kind }
         } else if opts.constructor().is_some() {
+            if catch && !catch_unwrapped {
+                bail_span!(
+                    self,
+                    "constructors with `catch` must return a literal `Result<...>`"
+                );
+            }
             let class = match js_ret {
                 Some(ref ty) => ty,
                 _ => bail_span!(self, "constructor returns must be bare types"),
@@ -1138,6 +1150,7 @@ impl<'a>
             kind,
             js_ret,
             catch,
+            catch_unwrapped,
             variadic,
             structural: opts.structural().is_some() || opts.r#final().is_none(),
             rust_name: self.sig.ident,

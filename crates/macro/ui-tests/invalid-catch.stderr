@@ -1,0 +1,57 @@
+error[E0277]: `#[wasm_bindgen(catch)]` imports must return `Result<T, E>` where `T` is a supported by-value type and `E: From<JsValue>`
+  --> ui-tests/invalid-catch.rs:13:8
+   |
+10 | #[wasm_bindgen]
+   | --------------- in this procedural macro expansion
+...
+13 |     fn f() -> u32;
+   |        ^ this `catch` import does not return a supported `Result`
+   |
+   = help: the trait `CatchFromWasmAbi` is not implemented for `u32`
+   = help: the trait `CatchFromWasmAbi` is implemented for `Result<T, E>`
+   = note: this error originates in the attribute macro `wasm_bindgen` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0107]: missing generics for enum `Result`
+  --> ui-tests/invalid-catch.rs:15:15
+   |
+15 |     fn g() -> Result;
+   |               ^^^^^^ expected 2 generic arguments
+   |
+help: add missing generic arguments
+   |
+15 |     fn g() -> Result<T, E>;
+   |                     ++++++
+
+error[E0107]: missing generics for enum `Result`
+  --> ui-tests/invalid-catch.rs:15:8
+   |
+10 | #[wasm_bindgen]
+   | --------------- in this procedural macro expansion
+...
+15 |     fn g() -> Result;
+   |        ^ expected 2 generic arguments
+   |
+   = note: this error originates in the attribute macro `wasm_bindgen` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: add missing generic arguments
+   |
+15 |     fn g<T, E>() -> Result;
+   |         ++++++
+
+error[E0277]: `#[wasm_bindgen(catch)]` imports must return `Result<T, E>` where `T` is a supported by-value type and `E: From<JsValue>`
+  --> ui-tests/invalid-catch.rs:10:1
+   |
+10 | #[wasm_bindgen]
+   | ^^^^^^^^^^^^^^^ this `catch` import does not return a supported `Result`
+   |
+   = help: the trait `CatchFromWasmAbi` is not implemented for `u32`
+   = help: the trait `CatchFromWasmAbi` is implemented for `Result<T, E>`
+   = note: this error originates in the attribute macro `wasm_bindgen` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `#[wasm_bindgen(catch)]` imports must return `Result<T, E>` where `T` is a supported by-value type and `E: From<JsValue>`
+  --> ui-tests/invalid-catch.rs:13:15
+   |
+13 |     fn f() -> u32;
+   |               ^^^ this `catch` import does not return a supported `Result`
+   |
+   = help: the trait `CatchFromWasmAbi` is not implemented for `u32`
+   = help: the trait `CatchFromWasmAbi` is implemented for `Result<T, E>`

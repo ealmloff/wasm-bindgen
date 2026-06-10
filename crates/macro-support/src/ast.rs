@@ -201,6 +201,12 @@ pub struct ImportFunction {
     pub js_ret: Option<syn::Type>,
     /// Whether to catch JS exceptions
     pub catch: bool,
+    /// For `catch` imports: whether the parser managed to syntactically
+    /// unwrap a literal `Result<T, _>` return into `js_ret` (today's
+    /// behavior, required by catch constructors and generic returns). When
+    /// `false`, `js_ret` is the whole written return type and conversion
+    /// goes through `CatchFromWasmAbi`, which sees through type aliases.
+    pub catch_unwrapped: bool,
     /// Whether the function is variadic on the JS side
     pub variadic: bool,
     /// Whether the function should use structural type checking

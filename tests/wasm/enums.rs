@@ -334,7 +334,7 @@ fn test_fallback_union_roundtrip() {
 // `From<Promise<T>> for JsFuture<T>` impl required `T: JsGeneric`, which
 // dynamic unions cannot satisfy because they are tagged Rust enums (not
 // `#[repr(transparent)]` wrappers around `JsValue`). The bound has been
-// loosened to `T: FromWasmAbi + 'static`, which is the actual minimum the
+// loosened to the by-value `ArgAbi` bound, which is the actual minimum the
 // closure shim needs.
 #[wasm_bindgen]
 pub async fn async_union_roundtrip(o: OuterUnion) -> OuterUnion {

@@ -7,10 +7,10 @@ use core::str;
 
 use crate::__rt::{marker::ErasableGeneric, WasmWord};
 use crate::__wbindgen_copy_to_typed_array;
+use crate::convert::arg::{borrowed_arg_abi, by_value_arg_abi};
 use crate::convert::{
-    js_value_vector_from_abi, js_value_vector_into_abi, FromWasmAbi, IntoWasmAbi,
-    LongRefFromWasmAbi, OptionFromWasmAbi, OptionIntoWasmAbi, RefFromWasmAbi, RefMutFromWasmAbi,
-    UpcastFrom, VectorFromWasmAbi, VectorIntoWasmAbi, WasmAbi,
+    js_value_vector_from_abi, js_value_vector_into_abi, Exclusive, IntoWasmAbi, OptionIntoWasmAbi,
+    Shared, UpcastFrom, VectorFromWasmAbi, VectorIntoWasmAbi, WasmAbi,
 };
 use crate::describe::*;
 use crate::JsValue;
@@ -204,37 +204,30 @@ macro_rules! vectors_internal {
             }
         }
 
-        impl RefFromWasmAbi for [$t] {
-            type Abi = WasmSlice;
-            type Anchor = Box<[$t]>;
-
-            #[inline]
-            unsafe fn ref_from_abi(js: WasmSlice) -> Box<[$t]> {
-                <Box<[$t]>>::from_abi(js)
+        // `&[T]`: the guard owns the copied contents under either scope.
+        borrowed_arg_abi!(
+            impl ArgAbi for &[$t] {
+                type Abi = WasmSlice;
+                type Guard = Shared<Box<[$t]>>;
+                |abi| Shared(<$t as VectorFromWasmAbi>::vector_from_abi(abi));
+                describe = shared_ref([$t]);
             }
-        }
+        );
 
-        impl RefMutFromWasmAbi for [$t] {
-            type Abi = WasmMutSlice;
-            type Anchor = MutSlice<$t>;
-
-            #[inline]
-            unsafe fn ref_mut_from_abi(js: WasmMutSlice) -> MutSlice<$t> {
-                let contents = <Box<[$t]>>::from_abi(js.slice);
-                let js = JsValue::from_abi(js.idx);
-                MutSlice { contents, js }
+        // `&mut [T]`: the JS write-back happens in `MutSlice`'s `Drop`,
+        // i.e. when the guard drops.
+        borrowed_arg_abi!(
+            impl ArgAbi for &mut [$t] {
+                type Abi = WasmMutSlice;
+                type Guard = Exclusive<MutSlice<$t>>;
+                |abi| Exclusive(MutSlice {
+                    contents: <$t as VectorFromWasmAbi>::vector_from_abi(abi.slice),
+                    js: JsValue::_new(abi.idx),
+                });
+                describe = refmut([$t]);
             }
-        }
+        );
 
-        impl LongRefFromWasmAbi for [$t] {
-            type Abi = WasmSlice;
-            type Anchor = Box<[$t]>;
-
-            #[inline]
-            unsafe fn long_ref_from_abi(js: WasmSlice) -> Box<[$t]> {
-                Self::ref_from_abi(js)
-            }
-        }
     };
 }
 
@@ -267,7 +260,7 @@ impl VectorIntoWasmAbi for String {
 }
 
 impl VectorFromWasmAbi for String {
-    type Abi = <Box<[JsValue]> as FromWasmAbi>::Abi;
+    type Abi = <JsValue as VectorFromWasmAbi>::Abi;
 
     unsafe fn vector_from_abi(js: Self::Abi) -> Box<[Self]> {
         js_value_vector_from_abi(js)
@@ -386,27 +379,15 @@ where
     }
 }
 
-impl<T> FromWasmAbi for Vec<T>
-where
-    Box<[T]>: FromWasmAbi<Abi = WasmSlice>,
-{
-    type Abi = <Box<[T]> as FromWasmAbi>::Abi;
-
-    #[inline]
-    unsafe fn from_abi(js: Self::Abi) -> Self {
-        <Box<[T]>>::from_abi(js).into()
+by_value_arg_abi!(
+    impl<T> ArgAbi for Vec<T>
+    where (T: VectorFromWasmAbi<Abi = WasmSlice>, Vec<T>: WasmDescribe,)
+    {
+        type Abi = WasmSlice;
+        |js| Vec::from(<T as VectorFromWasmAbi>::vector_from_abi(js))
     }
-}
-
-impl<T> OptionFromWasmAbi for Vec<T>
-where
-    Box<[T]>: FromWasmAbi<Abi = WasmSlice>,
-{
-    #[inline]
-    fn is_none(abi: &WasmSlice) -> bool {
-        abi.ptr.is_zero()
-    }
-}
+    with Option (is_none = js.ptr.is_zero())
+);
 
 impl IntoWasmAbi for String {
     type Abi = <Vec<u8> as IntoWasmAbi>::Abi;
@@ -426,21 +407,14 @@ impl OptionIntoWasmAbi for String {
     }
 }
 
-impl FromWasmAbi for String {
-    type Abi = <Vec<u8> as FromWasmAbi>::Abi;
-
-    #[inline]
-    unsafe fn from_abi(js: Self::Abi) -> Self {
-        String::from_utf8_unchecked(<Vec<u8>>::from_abi(js))
+by_value_arg_abi!(
+    // The JS glue always passes valid UTF-8.
+    impl ArgAbi for String {
+        type Abi = WasmSlice;
+        |js| String::from_utf8_unchecked(Vec::from(<u8 as VectorFromWasmAbi>::vector_from_abi(js)))
     }
-}
-
-impl OptionFromWasmAbi for String {
-    #[inline]
-    fn is_none(slice: &WasmSlice) -> bool {
-        slice.ptr.is_zero()
-    }
-}
+    with Option (is_none = js.ptr.is_zero())
+);
 
 impl<'a> IntoWasmAbi for &'a str {
     type Abi = <&'a [u8] as IntoWasmAbi>::Abi;
@@ -457,26 +431,6 @@ impl OptionIntoWasmAbi for &str {
     #[inline]
     fn none() -> Self::Abi {
         null_slice()
-    }
-}
-
-impl RefFromWasmAbi for str {
-    type Abi = <[u8] as RefFromWasmAbi>::Abi;
-    type Anchor = Box<str>;
-
-    #[inline]
-    unsafe fn ref_from_abi(js: Self::Abi) -> Self::Anchor {
-        mem::transmute::<Box<[u8]>, Box<str>>(<Box<[u8]>>::from_abi(js))
-    }
-}
-
-impl LongRefFromWasmAbi for str {
-    type Abi = <[u8] as RefFromWasmAbi>::Abi;
-    type Anchor = Box<str>;
-
-    #[inline]
-    unsafe fn long_ref_from_abi(js: Self::Abi) -> Self::Anchor {
-        Self::ref_from_abi(js)
     }
 }
 
@@ -515,22 +469,15 @@ where
     }
 }
 
-impl<T: VectorFromWasmAbi> FromWasmAbi for Box<[T]> {
-    type Abi = <T as VectorFromWasmAbi>::Abi;
-
-    unsafe fn from_abi(js: Self::Abi) -> Self {
-        T::vector_from_abi(js)
+by_value_arg_abi!(
+    impl<T> ArgAbi for Box<[T]>
+    where (T: VectorFromWasmAbi<Abi = WasmSlice>, Box<[T]>: WasmDescribe,)
+    {
+        type Abi = WasmSlice;
+        |js| <T as VectorFromWasmAbi>::vector_from_abi(js)
     }
-}
-
-impl<T> OptionFromWasmAbi for Box<[T]>
-where
-    Self: FromWasmAbi<Abi = WasmSlice>,
-{
-    fn is_none(slice: &WasmSlice) -> bool {
-        slice.ptr.is_zero()
-    }
-}
+    with Option (is_none = js.ptr.is_zero())
+);
 
 impl<T: ErasableGeneric<Repr = JsValue> + WasmDescribe> VectorFromWasmAbi for T {
     type Abi = WasmSlice;

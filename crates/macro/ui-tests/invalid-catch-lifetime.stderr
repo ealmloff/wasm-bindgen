@@ -1,0 +1,65 @@
+error[E0261]: use of undeclared lifetime name `'a`
+  --> ui-tests/invalid-catch-lifetime.rs:10:22
+   |
+10 |     fn f() -> Result<'a>;
+   |         -            ^^ undeclared lifetime
+   |         |
+   |         help: consider introducing lifetime `'a` here: `<'a>`
+
+error[E0261]: use of undeclared lifetime name `'a`
+  --> ui-tests/invalid-catch-lifetime.rs:10:8
+   |
+7  | #[wasm_bindgen]
+   | --------------- in this procedural macro expansion
+...
+10 |     fn f() -> Result<'a>;
+   |        ^- lifetime `'a` is missing in item created through this procedural macro
+   |        |
+   |        undeclared lifetime
+   |
+   = note: this error originates in the attribute macro `wasm_bindgen` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0107]: enum takes 0 lifetime arguments but 1 lifetime argument was supplied
+  --> ui-tests/invalid-catch-lifetime.rs:10:15
+   |
+10 |     fn f() -> Result<'a>;
+   |               ^^^^^^---- help: remove the unnecessary generics
+   |               |
+   |               expected 0 lifetime arguments
+
+error[E0107]: enum takes 2 generic arguments but 0 generic arguments were supplied
+  --> ui-tests/invalid-catch-lifetime.rs:10:15
+   |
+10 |     fn f() -> Result<'a>;
+   |               ^^^^^^ expected 2 generic arguments
+   |
+help: add missing generic arguments
+   |
+10 |     fn f() -> Result<'a, T, E>;
+   |                        ++++++
+
+error[E0107]: enum takes 0 lifetime arguments but 1 lifetime argument was supplied
+  --> ui-tests/invalid-catch-lifetime.rs:10:8
+   |
+7  | #[wasm_bindgen]
+   | --------------- in this procedural macro expansion
+...
+10 |     fn f() -> Result<'a>;
+   |        ^ expected 0 lifetime arguments
+   |
+   = note: this error originates in the attribute macro `wasm_bindgen` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0107]: enum takes 2 generic arguments but 0 generic arguments were supplied
+  --> ui-tests/invalid-catch-lifetime.rs:10:8
+   |
+7  | #[wasm_bindgen]
+   | --------------- in this procedural macro expansion
+...
+10 |     fn f() -> Result<'a>;
+   |        ^ expected 2 generic arguments
+   |
+   = note: this error originates in the attribute macro `wasm_bindgen` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: add missing generic arguments
+   |
+10 |     fn f, T, E() -> Result<'a>;
+   |         ++++++

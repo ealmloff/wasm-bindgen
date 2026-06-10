@@ -1389,7 +1389,9 @@ pub struct JsStatic<T: 'static> {
 #[cfg(feature = "std")]
 #[allow(deprecated)]
 #[cfg(not(target_feature = "atomics"))]
-impl<T: crate::convert::FromWasmAbi + 'static> Deref for JsStatic<T> {
+impl<T: crate::convert::ArgAbi<crate::convert::CallScoped, Guard = Option<T>> + 'static> Deref
+    for JsStatic<T>
+{
     type Target = T;
     fn deref(&self) -> &T {
         unsafe { self.__inner.with(|ptr| &*(ptr as *const T)) }

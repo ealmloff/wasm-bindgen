@@ -72,6 +72,7 @@ pub mod struct_vecs;
 pub mod structural;
 pub mod truthy_falsy;
 pub mod try_from_js_value;
+pub mod type_aliases;
 #[cfg(all(panic = "unwind", feature = "std"))]
 pub mod unwind;
 pub mod usize;

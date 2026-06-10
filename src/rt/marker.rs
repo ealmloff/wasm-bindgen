@@ -38,7 +38,7 @@ pub trait SupportsStaticProperty {}
 pub struct CheckSupportsStaticProperty<T: SupportsStaticProperty>(T);
 
 #[cfg(all(feature = "std", target_family = "wasm", panic = "unwind"))]
-use core::panic::UnwindSafe;
+use core::panic::{RefUnwindSafe, UnwindSafe};
 
 /// Marker trait for types that are UnwindSafe only when building with panic unwind
 pub trait MaybeUnwindSafe {}
@@ -48,6 +48,22 @@ impl<T: UnwindSafe + ?Sized> MaybeUnwindSafe for T {}
 
 #[cfg(not(all(feature = "std", target_family = "wasm", panic = "unwind")))]
 impl<T: ?Sized> MaybeUnwindSafe for T {}
+
+/// Marker trait for types that are RefUnwindSafe only when building with panic
+/// unwind.
+///
+/// Generic `ArgAbi` impls for `&T` / `&mut T` arguments can't call
+/// `__rt::ensure_ref_unwind_safe::<T>()` (its `T: RefUnwindSafe` bound only
+/// exists under `panic = "unwind"`, and a generic impl can't name a
+/// cfg-dependent bound), so they carry a `T: MaybeRefUnwindSafe` where-clause
+/// instead — the same logical guarantee `ensure_ref_unwind_safe` enforces.
+pub trait MaybeRefUnwindSafe {}
+
+#[cfg(all(feature = "std", target_family = "wasm", panic = "unwind"))]
+impl<T: RefUnwindSafe + ?Sized> MaybeRefUnwindSafe for T {}
+
+#[cfg(not(all(feature = "std", target_family = "wasm", panic = "unwind")))]
+impl<T: ?Sized> MaybeRefUnwindSafe for T {}
 
 /// Private marker trait for erasable generics - types with this trait have the same
 /// repr for all generic param values, and can therefore be transmuted on

@@ -11,7 +11,8 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use futures_core::stream::Stream;
-use wasm_bindgen::convert::FromWasmAbi;
+use wasm_bindgen::convert::{ArgAbi, CallScoped};
+use wasm_bindgen::describe::WasmDescribe;
 use wasm_bindgen::{prelude::*, JsGeneric};
 
 /// A `Stream` that yields values from an underlying `AsyncIterator`.
@@ -21,7 +22,7 @@ pub struct JsStream<T = JsValue> {
     done: bool,
 }
 
-impl<T: JsGeneric + FromWasmAbi> JsStream<T> {
+impl<T: JsGeneric + ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe> JsStream<T> {
     fn next_future(&self) -> Result<JsFuture<IteratorNext<T>>, JsValue> {
         self.iter.next_iterator().map(JsFuture::from)
     }
@@ -37,7 +38,9 @@ impl<T> From<AsyncIterator<T>> for JsStream<T> {
     }
 }
 
-impl<T: JsGeneric + FromWasmAbi + Unpin> Stream for JsStream<T> {
+impl<T: JsGeneric + ArgAbi<CallScoped, Guard = Option<T>> + WasmDescribe + Unpin> Stream
+    for JsStream<T>
+{
     type Item = Result<T, JsValue>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {

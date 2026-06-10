@@ -49,3 +49,30 @@ fn test_foo() {
     foo(false);
     A::new().foo();
 }
+
+// Canary for the trait-based export dispatch: the decode → project shape
+// the macro emits must work for an alias-hidden `&str` (type-level only:
+// `WasmSlice` carries 32-bit pointers, so a slice abi can't round-trip on
+// a 64-bit host) and round-trip owned arguments with host-safe ABI values.
+// (`&mut [T]` guards aren't exercised here because their drop runs a
+// wasm-only intrinsic; the wasm test suite covers them.)
+#[test]
+fn arg_abi_canary() {
+    use wasm_bindgen::convert::{ArgAbi, ArgGuard, CallScoped, IntoWasmAbi};
+
+    type Str<'a> = &'a str;
+
+    fn str_shape(abi: <Str<'_> as ArgAbi<CallScoped>>::Abi) -> usize {
+        let mut g = unsafe { <Str<'_> as ArgAbi<CallScoped>>::arg_from_abi(abi) };
+        let s = ArgGuard::project(&mut g);
+        s.len()
+    }
+    let _ = str_shape;
+
+    // Runtime decode-project round-trip, mirroring the generated shape.
+    let mut a0 = unsafe { <u32 as ArgAbi<CallScoped>>::arg_from_abi(2u32.into_abi()) };
+    let mut a1 = unsafe { <f64 as ArgAbi<CallScoped>>::arg_from_abi(1.5f64.into_abi()) };
+    let a0 = ArgGuard::project(&mut a0);
+    let a1 = ArgGuard::project(&mut a1);
+    assert_eq!(a0 as f64 + a1, 3.5);
+}

@@ -1,4 +1,4 @@
-use crate::convert::{FromWasmAbi, IntoWasmAbi, WasmAbi, WasmRet};
+use crate::convert::{IntoWasmAbi, WasmAbi, WasmRet};
 use crate::describe::inform;
 use crate::JsValue;
 #[cfg(all(target_family = "wasm", feature = "std", panic = "unwind"))]
@@ -41,7 +41,12 @@ pub fn js_panic(err: JsValue) {
 // The implementation generates a no-op JS adapter that simply takes an argument
 // in one type, decodes it from the ABI, and then returns the same value back
 // encoded with a different type.
-pub fn wbg_cast<From: IntoWasmAbi, To: FromWasmAbi>(value: From) -> To {
+pub fn wbg_cast<From, To>(value: From) -> To
+where
+    From: IntoWasmAbi,
+    To: crate::convert::ArgAbi<crate::convert::CallScoped, Guard = Option<To>>
+        + crate::describe::WasmDescribe,
+{
     // Here we need to create a conversion function between arbitrary types
     // supported by the wasm-bindgen's ABI.
     // To do that we... take a few unconventional turns.
@@ -82,18 +87,23 @@ pub fn wbg_cast<From: IntoWasmAbi, To: FromWasmAbi>(value: From) -> To {
 
     #[inline(never)]
     #[cfg_attr(wasm_bindgen_unstable_test_coverage, coverage(off))]
-    unsafe extern "C" fn breaks_if_inlined<From: IntoWasmAbi, To: FromWasmAbi>(
+    unsafe extern "C" fn breaks_if_inlined<From, To>(
         prim1: <From::Abi as WasmAbi>::Prim1,
         prim2: <From::Abi as WasmAbi>::Prim2,
         prim3: <From::Abi as WasmAbi>::Prim3,
         prim4: <From::Abi as WasmAbi>::Prim4,
-    ) -> WasmRet<To::Abi> {
+    ) -> WasmRet<<To as crate::convert::ArgAbi<crate::convert::CallScoped>>::Abi>
+    where
+        From: IntoWasmAbi,
+        To: crate::convert::ArgAbi<crate::convert::CallScoped, Guard = Option<To>>
+            + crate::describe::WasmDescribe,
+    {
         inform(FUNCTION);
         inform(0);
         inform(1);
         From::describe();
-        To::describe();
-        To::describe();
+        <To as crate::describe::WasmDescribe>::describe();
+        <To as crate::describe::WasmDescribe>::describe();
         // Pass all inputs and outputs across the opaque FFI boundary to prevent
         // compiler from removing them as dead code.
         core::ptr::read(super::__wbindgen_describe_cast(
@@ -104,7 +114,12 @@ pub fn wbg_cast<From: IntoWasmAbi, To: FromWasmAbi>(value: From) -> To {
 
     let (prim1, prim2, prim3, prim4) = value.into_abi().split();
 
-    unsafe { To::from_abi(breaks_if_inlined::<From, To>(prim1, prim2, prim3, prim4).join()) }
+    unsafe {
+        <To as crate::convert::ArgAbi<crate::convert::CallScoped>>::arg_from_abi(
+            breaks_if_inlined::<From, To>(prim1, prim2, prim3, prim4).join(),
+        )
+        .unwrap()
+    }
 }
 
 pub(crate) const JSIDX_OFFSET: u32 = 1024; // keep in sync with js/mod.rs
@@ -846,6 +861,60 @@ pub fn schedule_reinit() {
 pub unsafe extern "C" fn __wbindgen_exn_store(idx: u32) {
     debug_assert_eq!(GLOBAL_EXNDATA.0.get()[0], 0);
     GLOBAL_EXNDATA.0.set([1, idx]);
+}
+
+/// Whether an externref-style ABI index refers to `undefined`, peeked
+/// without taking ownership of the index (the temporary handle must not
+/// free it, hence `ManuallyDrop`).
+#[doc(hidden)]
+pub fn is_undefined_abi(idx: u32) -> bool {
+    core::mem::ManuallyDrop::new(crate::JsValue::_new(idx)).is_undefined()
+}
+
+/// Decode a shared borrow of an exported class from its ABI pointer,
+/// bumping the JS-owned `Rc`'s strong count so the borrow stays valid for
+/// the guard's lifetime.
+///
+/// # Safety
+///
+/// `js` must be a valid, non-dangling pointer produced by the class's
+/// `IntoWasmAbi` impl.
+pub unsafe fn class_ref<T>(js: WasmPtr<WasmRefCell<T>>) -> RcRef<T> {
+    let js = js.into_ptr();
+    assert_not_null(js);
+
+    Rc::increment_strong_count(js);
+    RcRef::new(Rc::from_raw(js))
+}
+
+/// Like [`class_ref`], decoding an exclusive borrow.
+///
+/// # Safety
+///
+/// Same contract as [`class_ref`].
+pub unsafe fn class_ref_mut<T>(js: WasmPtr<WasmRefCell<T>>) -> RcRefMut<T> {
+    let js = js.into_ptr();
+    assert_not_null(js);
+
+    Rc::increment_strong_count(js);
+    RcRefMut::new(Rc::from_raw(js))
+}
+
+/// Decode an exported class by value, taking ownership of the JS-held
+/// allocation; throws if the value is currently borrowed.
+///
+/// # Safety
+///
+/// Same contract as [`class_ref`], and `js` must not be used again.
+pub unsafe fn class_take<T>(js: WasmPtr<WasmRefCell<T>>) -> T {
+    let ptr = js.into_ptr();
+    assert_not_null(ptr);
+    match Rc::try_unwrap(Rc::from_raw(ptr)) {
+        Ok(cell) => cell.into_inner(),
+        Err(_) => {
+            crate::throw_str("attempted to take ownership of Rust value while it was borrowed")
+        }
+    }
 }
 
 pub fn take_last_exception() -> Result<(), super::JsValue> {
