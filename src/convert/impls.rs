@@ -538,10 +538,10 @@ impl<T: IntoWasmAbi> IntoWasmAbi for Clamped<T> {
 impl<WbgS: Scope, T> ArgAbi<WbgS> for Clamped<T>
 where
     T: ArgAbi<WbgS, Guard = Option<T>> + WasmDescribe,
-    Clamped<T>: crate::__rt::marker::MaybeUnwindSafe,
 {
     type Abi = <T as ArgAbi<WbgS>>::Abi;
     type Guard = Option<Clamped<T>>;
+    type UnwindCheck = crate::__rt::marker::OwnedCheck<Clamped<T>>;
 
     #[inline(always)]
     unsafe fn arg_from_abi(js: Self::Abi) -> Self::Guard {

@@ -94,6 +94,15 @@ pub trait ArgAbi<S: Scope> {
     /// knows how to project it ([`ArgGuard`]).
     type Guard: ArgGuard;
 
+    /// Which unwind-safety property export shims assert for this written
+    /// argument type under `panic = "unwind"`:
+    /// [`OwnedCheck`](crate::__rt::marker::OwnedCheck)`<T>` requires
+    /// `T: UnwindSafe`, [`RefCheck`](crate::__rt::marker::RefCheck)`<P>`
+    /// requires the pointee `P: RefUnwindSafe`. Checked only by
+    /// `__rt::ensure_arg_unwind_safe` at export call sites — defining or
+    /// returning a non-unwind-safe type stays legal.
+    type UnwindCheck;
+
     /// Decode the guard from the incoming ABI value.
     ///
     /// # Safety
@@ -238,12 +247,16 @@ where
 {
     type Abi = <T as OptionArgAbi<S>>::OptionAbi;
     type Guard = Option<Option<T>>;
+    // The whole `Option<T>` is consumed by value, just like any other
+    // owned argument (`Option<T>: UnwindSafe ⇔ T: UnwindSafe`).
+    type UnwindCheck = crate::__rt::marker::OwnedCheck<Option<T>>;
 
     #[inline(always)]
     unsafe fn arg_from_abi(abi: Self::Abi) -> Self::Guard {
         Some(<T as OptionArgAbi<S>>::option_arg_from_abi(abi))
     }
 
+    #[cfg_attr(wasm_bindgen_unstable_test_coverage, coverage(off))]
     fn describe_arg() {
         <Option<T> as WasmDescribe>::describe();
     }
@@ -254,21 +267,20 @@ where
 /// argument's conversion or the call unwinds, the already-decoded value
 /// drops), and projection hands it over.
 ///
-/// The `MaybeUnwindSafe` bound is the type-level equivalent of the
-/// `ensure_unwind_safe::<T>()` assertion the macro previously emitted for
-/// every owned argument.
-///
 /// The second form also implements `ArgAbi<S>` for `Option<$t>` with an
 /// in-band `None` sentinel sharing `$t`'s ABI — the wire format previously
-/// previously expressed through a separate helper trait.
-#[doc(hidden)]
-#[macro_export]
-macro_rules! __wbindgen_by_value_arg_abi {
+/// expressed through a separate helper trait.
+///
+/// Crate-internal: the proc macro emits the equivalent impls directly
+/// (`by_value_arg_abi_impls` in macro-support's codegen) because a macro
+/// invocation in module-item position stalls rustc's import resolution
+/// under `use crate::wasm_bindgen;` plus glob re-exports (issue #4597).
+macro_rules! by_value_arg_abi {
     // `Option<$t>` shares `$t`'s ABI with an in-band `None` sentinel.
     (impl$(<$($g:ident),*>)? ArgAbi for $t:ty $(where ($($wc:tt)*))? {
         type Abi = $abi:ty; |$js:ident| $decode:expr
      } with Option (is_none = $is_none:expr)) => {
-        $crate::__wbindgen_by_value_arg_abi!(
+        $crate::convert::arg::by_value_arg_abi!(
             impl$(<$($g),*>)? ArgAbi for $t $(where ($($wc)*))? { type Abi = $abi; |$js| $decode }
             with Option (type OptionAbi = $abi; is_none = $is_none)
         );
@@ -277,7 +289,7 @@ macro_rules! __wbindgen_by_value_arg_abi {
     (impl$(<$($g:ident),*>)? ArgAbi for $t:ty $(where ($($wc:tt)*))? {
         type Abi = $abi:ty; |$js:ident| $decode:expr
      } with Option (type OptionAbi = $opt_abi:ty; is_none = $is_none:expr)) => {
-        $crate::__wbindgen_by_value_arg_abi!(
+        $crate::convert::arg::by_value_arg_abi!(
             impl$(<$($g),*>)? ArgAbi for $t $(where ($($wc)*))? { type Abi = $abi; |$js| $decode }
             with Option (
                 type OptionAbi = $opt_abi;
@@ -294,13 +306,12 @@ macro_rules! __wbindgen_by_value_arg_abi {
     (impl$(<$($g:ident),*>)? ArgAbi for $t:ty $(where ($($wc:tt)*))? {
         type Abi = $abi:ty; |$js:ident| $decode:expr
      } with Option (type OptionAbi = $opt_abi:ty; |$opt_js:ident| $opt_decode:expr)) => {
-        $crate::__wbindgen_by_value_arg_abi!(
+        $crate::convert::arg::by_value_arg_abi!(
             impl$(<$($g),*>)? ArgAbi for $t $(where ($($wc)*))? { type Abi = $abi; |$js| $decode }
         );
 
         impl<WbgS: $crate::convert::Scope $(, $($g),*)?> $crate::convert::OptionArgAbi<WbgS> for $t
         where
-            $t: $crate::__rt::marker::MaybeUnwindSafe,
             $($($wc)*)?
         {
             type OptionAbi = $opt_abi;
@@ -317,11 +328,11 @@ macro_rules! __wbindgen_by_value_arg_abi {
      }) => {
         impl<WbgS: $crate::convert::Scope $(, $($g),*)?> $crate::convert::ArgAbi<WbgS> for $t
         where
-            $t: $crate::__rt::marker::MaybeUnwindSafe,
             $($($wc)*)?
         {
             type Abi = $abi;
             type Guard = Option<$t>;
+            type UnwindCheck = $crate::__rt::marker::OwnedCheck<$t>;
 
             #[inline(always)]
             #[allow(unreachable_code, clippy::diverging_sub_expression)]
@@ -332,13 +343,14 @@ macro_rules! __wbindgen_by_value_arg_abi {
                 Some((|| -> $t { unsafe { $decode } })())
             }
 
+            #[cfg_attr(wasm_bindgen_unstable_test_coverage, coverage(off))]
             fn describe_arg() {
                 <$t as $crate::describe::WasmDescribe>::describe();
             }
         }
     };
 }
-pub(crate) use crate::__wbindgen_by_value_arg_abi as by_value_arg_abi;
+pub(crate) use by_value_arg_abi;
 
 /// Implements `ArgAbi<S>` for a reference type: the guard owns the decoded
 /// data (an anchor) and projection borrows from it.
@@ -347,9 +359,11 @@ pub(crate) use crate::__wbindgen_by_value_arg_abi as by_value_arg_abi;
 /// either scope, described as `REF`/`LONGREF` picked by the scope; the
 /// `mut` form is likewise scope-generic and described as `REFMUT`; the
 /// last form is for a single fixed scope with an explicit descriptor tag.
-#[doc(hidden)]
-#[macro_export]
-macro_rules! __wbindgen_borrowed_arg_abi {
+///
+/// Crate-internal: the proc macro emits the equivalent impls directly
+/// (`borrowed_arg_abi_impl` in macro-support's codegen) — see
+/// [`by_value_arg_abi`] for why.
+macro_rules! borrowed_arg_abi {
     (impl$(($($g:tt)*))? ArgAbi for &$pointee:ty $(where ($($wc:tt)*))? {
         type Abi = $abi:ty;
         type Guard = $guard:ty;
@@ -359,18 +373,18 @@ macro_rules! __wbindgen_borrowed_arg_abi {
         impl<$($($g)*,)? WbgS: $crate::convert::Scope> $crate::convert::ArgAbi<WbgS>
             for &$pointee
         where
-            $pointee: $crate::__rt::marker::MaybeRefUnwindSafe,
             $($($wc)*)?
         {
             type Abi = $abi;
             type Guard = $guard;
+            type UnwindCheck = $crate::__rt::marker::RefCheck<$pointee>;
 
             #[inline(always)]
             unsafe fn arg_from_abi($js: Self::Abi) -> Self::Guard {
                 $decode
             }
 
-
+            #[cfg_attr(wasm_bindgen_unstable_test_coverage, coverage(off))]
             fn describe_arg() {
                 $crate::describe::inform(WbgS::SHARED_REF);
                 <$elem as $crate::describe::WasmDescribe>::describe();
@@ -386,18 +400,18 @@ macro_rules! __wbindgen_borrowed_arg_abi {
         impl<$($($g)*,)? WbgS: $crate::convert::Scope> $crate::convert::ArgAbi<WbgS>
             for &mut $pointee
         where
-            $pointee: $crate::__rt::marker::MaybeRefUnwindSafe,
             $($($wc)*)?
         {
             type Abi = $abi;
             type Guard = $guard;
+            type UnwindCheck = $crate::__rt::marker::RefCheck<$pointee>;
 
             #[inline(always)]
             unsafe fn arg_from_abi($js: Self::Abi) -> Self::Guard {
                 $decode
             }
 
-
+            #[cfg_attr(wasm_bindgen_unstable_test_coverage, coverage(off))]
             fn describe_arg() {
                 $crate::describe::inform($crate::describe::REFMUT);
                 <$elem as $crate::describe::WasmDescribe>::describe();
@@ -412,18 +426,18 @@ macro_rules! __wbindgen_borrowed_arg_abi {
     }) => {
         impl$(<$($g)*>)? $crate::convert::ArgAbi<$scope> for &$pointee
         where
-            $pointee: $crate::__rt::marker::MaybeRefUnwindSafe,
             $($($wc)*)?
         {
             type Abi = $abi;
             type Guard = $guard;
+            type UnwindCheck = $crate::__rt::marker::RefCheck<$pointee>;
 
             #[inline(always)]
             unsafe fn arg_from_abi($js: Self::Abi) -> Self::Guard {
                 $decode
             }
 
-
+            #[cfg_attr(wasm_bindgen_unstable_test_coverage, coverage(off))]
             fn describe_arg() {
                 $crate::describe::inform($crate::describe::$tag);
                 <$elem as $crate::describe::WasmDescribe>::describe();
@@ -431,7 +445,7 @@ macro_rules! __wbindgen_borrowed_arg_abi {
         }
     };
 }
-pub(crate) use crate::__wbindgen_borrowed_arg_abi as borrowed_arg_abi;
+pub(crate) use borrowed_arg_abi;
 
 // `&str`: the guard owns the UTF-8 copy under both scopes; the JS glue
 // always passes valid UTF-8.

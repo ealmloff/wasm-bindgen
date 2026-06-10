@@ -49,21 +49,56 @@ impl<T: UnwindSafe + ?Sized> MaybeUnwindSafe for T {}
 #[cfg(not(all(feature = "std", target_family = "wasm", panic = "unwind")))]
 impl<T: ?Sized> MaybeUnwindSafe for T {}
 
-/// Marker trait for types that are RefUnwindSafe only when building with panic
-/// unwind.
+/// Unwind-safety proxy of an argument consumed by value inside the catch
+/// boundary of an exported function: under `panic = "unwind"` it requires
+/// `T: UnwindSafe` (see [`ArgUnwindCheck`]).
+pub struct OwnedCheck<T: ?Sized>(core::marker::PhantomData<T>);
+
+/// Unwind-safety proxy of an argument that borrows `T` across the catch
+/// boundary of an exported function: under `panic = "unwind"` it requires
+/// `T: RefUnwindSafe`.
 ///
-/// Generic `ArgAbi` impls for `&T` / `&mut T` arguments can't call
-/// `__rt::ensure_ref_unwind_safe::<T>()` (its `T: RefUnwindSafe` bound only
-/// exists under `panic = "unwind"`, and a generic impl can't name a
-/// cfg-dependent bound), so they carry a `T: MaybeRefUnwindSafe` where-clause
-/// instead — the same logical guarantee `ensure_ref_unwind_safe` enforces.
-pub trait MaybeRefUnwindSafe {}
+/// The pointee's *logical* unwind safety is the right property for both
+/// `&T` and `&mut T` arguments: stdlib's `&mut T: !UnwindSafe` blanket
+/// means a written-type `UnwindSafe` check would fail unconditionally for
+/// every `&mut` argument and `&mut self` method. What actually matters is
+/// that the user's type must not contain interior mutability whose
+/// invariants could be silently broken when a panic is caught — the same
+/// property `RefCell`, `Cell`, and `Mutex` advertise when refusing to
+/// implement `RefUnwindSafe`.
+pub struct RefCheck<T: ?Sized>(core::marker::PhantomData<T>);
+
+/// The unwind-safety requirement of one exported-function argument,
+/// checked by `__rt::ensure_arg_unwind_safe` in the generated export shim
+/// — and only there, so declaring or returning a non-unwind-safe type
+/// stays legal; only *receiving* it in an export under `panic = "unwind"`
+/// is rejected.
+///
+/// Users whose type is genuinely safe to observe after a caught panic can
+/// opt out per argument with `std::panic::AssertUnwindSafe`, or per type
+/// with a manual `impl (Ref)UnwindSafe for MyType`.
+///
+/// Unconditionally satisfied outside `panic = "unwind"` builds (where
+/// panics abort instead).
+#[cfg_attr(
+    wbg_diagnostic,
+    diagnostic::on_unimplemented(
+        message = "this `#[wasm_bindgen]` export argument is not unwind-safe under `panic = \"unwind\"`",
+        note = "owned arguments must be `UnwindSafe`; `&T`/`&mut T` arguments and receivers require `T: RefUnwindSafe`",
+        note = "opt out with `std::panic::AssertUnwindSafe` or a manual `impl (Ref)UnwindSafe for MyType`",
+    )
+)]
+pub trait ArgUnwindCheck {}
 
 #[cfg(all(feature = "std", target_family = "wasm", panic = "unwind"))]
-impl<T: RefUnwindSafe + ?Sized> MaybeRefUnwindSafe for T {}
+impl<T: UnwindSafe + ?Sized> ArgUnwindCheck for OwnedCheck<T> {}
+#[cfg(all(feature = "std", target_family = "wasm", panic = "unwind"))]
+impl<T: RefUnwindSafe + ?Sized> ArgUnwindCheck for RefCheck<T> {}
 
 #[cfg(not(all(feature = "std", target_family = "wasm", panic = "unwind")))]
-impl<T: ?Sized> MaybeRefUnwindSafe for T {}
+impl<T: ?Sized> ArgUnwindCheck for OwnedCheck<T> {}
+#[cfg(not(all(feature = "std", target_family = "wasm", panic = "unwind")))]
+impl<T: ?Sized> ArgUnwindCheck for RefCheck<T> {}
 
 /// Private marker trait for erasable generics - types with this trait have the same
 /// repr for all generic param values, and can therefore be transmuted on

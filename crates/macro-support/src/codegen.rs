@@ -216,6 +216,187 @@ impl TryToTokens for ast::LinkToModule {
     }
 }
 
+/// The `Option<Self>` wire encoding emitted alongside a by-value `ArgAbi`
+/// impl: the wire type of `Option<ty>` and the in-band `None` sentinel
+/// test, an expression over the `js` binding.
+struct OptionEncoding {
+    option_abi: TokenStream,
+    is_none: TokenStream,
+}
+
+/// Emits a by-value `ArgAbi` impl (guard is `Option<ty>`), plus the paired
+/// `OptionArgAbi` impl when an `Option` encoding is given — the same shape
+/// the runtime crate's internal `by_value_arg_abi!` macro produces for its
+/// own impls.
+///
+/// The impls are emitted directly instead of invoking a helper macro
+/// through `#wasm_bindgen`: a macro invocation in module-item position
+/// stalls rustc's import resolution under `use crate::wasm_bindgen;` plus
+/// glob re-exports (issue #4597, pinned by tests/no_infinite_recursion.rs).
+///
+/// `lifetimes` and `type_params` are comma-terminated lists (lifetimes
+/// must precede the `WbgS` scope parameter, type parameters follow it);
+/// `where_preds` is a comma-terminated predicate list. `decode` is an
+/// expression over the `js` binding evaluating to `ty`; it may contain
+/// bare `return`s (kept scoped by the emitted closure wrapper).
+fn by_value_arg_abi_impls(
+    wasm_bindgen: &syn::Path,
+    lifetimes: &TokenStream,
+    type_params: &TokenStream,
+    ty: &TokenStream,
+    where_preds: &TokenStream,
+    abi: &TokenStream,
+    decode: &TokenStream,
+    option: Option<OptionEncoding>,
+) -> TokenStream {
+    let generics = quote! { <#lifetimes WbgS: #wasm_bindgen::convert::Scope, #type_params> };
+
+    let mut tokens = quote! {
+        #[automatically_derived]
+        impl #generics #wasm_bindgen::convert::ArgAbi<WbgS> for #ty
+        where #where_preds
+        {
+            type Abi = #abi;
+            type Guard = Option<#ty>;
+            type UnwindCheck = #wasm_bindgen::__rt::marker::OwnedCheck<#ty>;
+
+            #[inline(always)]
+            #[allow(unreachable_code, clippy::diverging_sub_expression)]
+            unsafe fn arg_from_abi(js: Self::Abi) -> Self::Guard {
+                // The closure keeps any `return`s inside the decode
+                // expression scoped to the decode itself.
+                #[allow(unused_unsafe, clippy::redundant_closure_call)]
+                Some((|| -> #ty { unsafe { #decode } })())
+            }
+
+            #wasm_bindgen::__wbindgen_coverage! {
+            fn describe_arg() {
+                <#ty as #wasm_bindgen::describe::WasmDescribe>::describe();
+            }
+            }
+        }
+    };
+    if let Some(OptionEncoding {
+        option_abi,
+        is_none,
+    }) = option
+    {
+        tokens.extend(quote! {
+            #[automatically_derived]
+            impl #generics #wasm_bindgen::convert::OptionArgAbi<WbgS> for #ty
+            where #where_preds
+            {
+                type OptionAbi = #option_abi;
+
+                #[inline(always)]
+                #[allow(unreachable_code, clippy::diverging_sub_expression)]
+                unsafe fn option_arg_from_abi(js: Self::OptionAbi) -> Option<Self> {
+                    if #is_none {
+                        None
+                    } else {
+                        #[allow(unused_unsafe, clippy::redundant_closure_call)]
+                        Some((|| -> #ty { unsafe { #decode } })())
+                    }
+                }
+            }
+        });
+    }
+    tokens
+}
+
+/// How a borrowed `ArgAbi` impl emitted by [`borrowed_arg_abi_impl`] is
+/// described to the descriptor interpreter.
+enum BorrowedDescribe {
+    /// Scope-generic `&T`: `inform(WbgS::SHARED_REF)` (`REF`/`LONGREF`
+    /// picked by the scope).
+    SharedRef,
+    /// Scope-generic `&mut T`: `inform(REFMUT)` under both scopes.
+    RefMut,
+    /// A single fixed scope with an explicit descriptor tag, e.g.
+    /// `CallScoped` + `REF`.
+    Fixed {
+        scope: TokenStream,
+        tag: TokenStream,
+    },
+}
+
+/// Emits an `ArgAbi` impl for `&pointee` / `&mut pointee` whose guard owns
+/// the decoded data (an anchor) — the same shape the runtime crate's
+/// internal `borrowed_arg_abi!` macro produces for its own impls. See
+/// [`by_value_arg_abi_impls`] for why this is not a macro invocation and
+/// for the parameter conventions; `decode` evaluates to the guard.
+fn borrowed_arg_abi_impl(
+    wasm_bindgen: &syn::Path,
+    lifetimes: &TokenStream,
+    type_params: &TokenStream,
+    mutable: bool,
+    pointee: &TokenStream,
+    where_preds: &TokenStream,
+    abi: &TokenStream,
+    guard: &TokenStream,
+    decode: &TokenStream,
+    describe: BorrowedDescribe,
+) -> TokenStream {
+    let amp = if mutable { quote!(&mut) } else { quote!(&) };
+    let scope_generic = quote! {
+        <#lifetimes #type_params WbgS: #wasm_bindgen::convert::Scope>
+    };
+    let (generics, scope_arg, describe_body) = match describe {
+        BorrowedDescribe::SharedRef => (
+            scope_generic,
+            quote!(WbgS),
+            quote! {
+                #wasm_bindgen::describe::inform(WbgS::SHARED_REF);
+                <#pointee as #wasm_bindgen::describe::WasmDescribe>::describe();
+            },
+        ),
+        BorrowedDescribe::RefMut => (
+            scope_generic,
+            quote!(WbgS),
+            quote! {
+                #wasm_bindgen::describe::inform(#wasm_bindgen::describe::REFMUT);
+                <#pointee as #wasm_bindgen::describe::WasmDescribe>::describe();
+            },
+        ),
+        BorrowedDescribe::Fixed { scope, tag } => {
+            let generics = if lifetimes.is_empty() && type_params.is_empty() {
+                quote! {}
+            } else {
+                quote! { <#lifetimes #type_params> }
+            };
+            (
+                generics,
+                scope,
+                quote! {
+                    #wasm_bindgen::describe::inform(#wasm_bindgen::describe::#tag);
+                    <#pointee as #wasm_bindgen::describe::WasmDescribe>::describe();
+                },
+            )
+        }
+    };
+    quote! {
+        #[automatically_derived]
+        impl #generics #wasm_bindgen::convert::ArgAbi<#scope_arg> for #amp #pointee
+        where #where_preds
+        {
+            type Abi = #abi;
+            type Guard = #guard;
+            type UnwindCheck = #wasm_bindgen::__rt::marker::RefCheck<#pointee>;
+
+            #[inline(always)]
+            unsafe fn arg_from_abi(js: Self::Abi) -> Self::Guard {
+                #decode
+            }
+
+            #wasm_bindgen::__wbindgen_coverage! {
+            fn describe_arg() {
+                #describe_body
+            }
+            }
+        }
+    }
+}
+
 impl ToTokens for ast::Struct {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let name = &self.rust_name;
@@ -229,6 +410,45 @@ impl ToTokens for ast::Struct {
         let class_abi = quote! {
             #wasm_bindgen::__rt::WasmPtr<#wasm_bindgen::__rt::WasmRefCell<#name>>
         };
+        let no_generics = quote! {};
+        let no_preds = quote! {};
+        let owned_arg_abi = by_value_arg_abi_impls(
+            wasm_bindgen,
+            &no_generics,
+            &no_generics,
+            &quote!(#name),
+            &no_preds,
+            &class_abi,
+            &quote!(#wasm_bindgen::__rt::class_take(js)),
+            Some(OptionEncoding {
+                option_abi: class_abi.clone(),
+                is_none: quote!(js.is_null()),
+            }),
+        );
+        let ref_arg_abi = borrowed_arg_abi_impl(
+            wasm_bindgen,
+            &no_generics,
+            &no_generics,
+            false,
+            &quote!(#name),
+            &no_preds,
+            &class_abi,
+            &quote!(#wasm_bindgen::convert::Shared<#wasm_bindgen::__rt::RcRef<#name>>),
+            &quote!(#wasm_bindgen::convert::Shared(#wasm_bindgen::__rt::class_ref(js))),
+            BorrowedDescribe::SharedRef,
+        );
+        let refmut_arg_abi = borrowed_arg_abi_impl(
+            wasm_bindgen,
+            &no_generics,
+            &no_generics,
+            true,
+            &quote!(#name),
+            &no_preds,
+            &class_abi,
+            &quote!(#wasm_bindgen::convert::Exclusive<#wasm_bindgen::__rt::RcRefMut<#name>>),
+            &quote!(#wasm_bindgen::convert::Exclusive(#wasm_bindgen::__rt::class_ref_mut(js))),
+            BorrowedDescribe::RefMut,
+        );
         (quote! {
             #[automatically_derived]
             impl #wasm_bindgen::__rt::marker::SupportsConstructor for #name {}
@@ -258,13 +478,7 @@ impl ToTokens for ast::Struct {
                 }
             }
 
-            #wasm_bindgen::__wbindgen_by_value_arg_abi!(
-                impl ArgAbi for #name {
-                    type Abi = #class_abi;
-                    |js| #wasm_bindgen::__rt::class_take(js)
-                }
-                with Option (is_none = js.is_null())
-            );
+            #owned_arg_abi
 
             #[automatically_derived]
             impl #wasm_bindgen::__rt::core::convert::From<#name> for
@@ -321,25 +535,11 @@ impl ToTokens for ast::Struct {
             // `&Class` export arguments under any scope: the guard bumps
             // the strong count either way; only the descriptor tag
             // differs by scope.
-            #wasm_bindgen::__wbindgen_borrowed_arg_abi!(
-                impl ArgAbi for &#name {
-                    type Abi = #class_abi;
-                    type Guard = #wasm_bindgen::convert::Shared<#wasm_bindgen::__rt::RcRef<#name>>;
-                    |js| #wasm_bindgen::convert::Shared(#wasm_bindgen::__rt::class_ref(js));
-                    describe = shared_ref(#name);
-                }
-            );
+            #ref_arg_abi
 
             // `&mut Class` export arguments: scope-independent and
             // described as REFMUT under both scopes.
-            #wasm_bindgen::__wbindgen_borrowed_arg_abi!(
-                impl ArgAbi for &mut #name {
-                    type Abi = #class_abi;
-                    type Guard = #wasm_bindgen::convert::Exclusive<#wasm_bindgen::__rt::RcRefMut<#name>>;
-                    |js| #wasm_bindgen::convert::Exclusive(#wasm_bindgen::__rt::class_ref_mut(js));
-                    describe = refmut(#name);
-                }
-            );
+            #refmut_arg_abi
 
             #[automatically_derived]
             impl #wasm_bindgen::convert::OptionIntoWasmAbi for #name {
@@ -758,6 +958,10 @@ impl TryToTokens for ast::Export {
             .zip(&abi_exprs)
             .map(|((ty, guard), abi_expr)| {
                 quote! {
+                    // Per-argument unwind-safety assertion (no-op outside
+                    // `panic = "unwind"`); the written type keeps the
+                    // user's spans so errors point at the argument.
+                    #wasm_bindgen::__rt::ensure_arg_unwind_safe::<#ty, #scope>();
                     let mut #guard = unsafe {
                         <#ty as #wasm_bindgen::convert::ArgAbi<#scope>>::arg_from_abi(#abi_expr)
                     };
@@ -1045,24 +1249,6 @@ impl TryToTokens for ast::ImportType {
         let phantom_init;
         let lifetime_params = generics::lifetime_params(&self.generics);
 
-        let borrowed_impl_generics = {
-            let lifetimes = generics::lifetime_params(&self.generics);
-            if lifetimes.is_empty() && type_params_with_bounds.is_empty() {
-                quote! {}
-            } else {
-                quote! { (#(#lifetimes,)* #(#type_params_with_bounds),*) }
-            }
-        };
-
-        let impl_generics_with_scope = {
-            let scope_param = quote! { WbgScope: #wasm_bindgen::convert::Scope };
-            if type_params_with_bounds.is_empty() {
-                quote! { <#(#lifetime_params,)* #scope_param> }
-            } else {
-                quote! { <#(#lifetime_params,)* #scope_param, #(#type_params_with_bounds),*> }
-            }
-        };
-
         // For `From<JsValue>`, only include lifetime params so type params
         // fall back to their defaults and callers don't need turbofish.
         let from_jsvalue_generics = if lifetime_params.is_empty() {
@@ -1133,9 +1319,9 @@ impl TryToTokens for ast::ImportType {
             }
         };
 
-        // The user-declared predicates as a parenthesizable list, for the
-        // emitted `__wbindgen_borrowed_arg_abi!` invocations (the macro
-        // adds the pointee's `MaybeRefUnwindSafe` bound itself).
+        // The user-declared predicates as a comma-terminated list for the
+        // emitted `ArgAbi` impls (the emission helpers add the
+        // unwind-safety marker bound themselves).
         let extra_where_preds = self
             .generics
             .where_clause
@@ -1146,27 +1332,82 @@ impl TryToTokens for ast::ImportType {
             })
             .unwrap_or_default();
 
-        // Where clause for the owned `ArgAbi` impls below: the existing
-        // predicates plus the `MaybeUnwindSafe` marker bound, the
-        // type-level equivalent of the `ensure_unwind_safe::<T>()`
-        // assertion previously emitted for owned export arguments.
-        let arg_abi_owned_where_clause = {
-            let mut clause =
-                self.generics
-                    .where_clause
-                    .clone()
-                    .unwrap_or_else(|| syn::WhereClause {
-                        where_token: Default::default(),
-                        predicates: Default::default(),
-                    });
-            let self_ty_generics = &ty_generics;
-            let self_ty: syn::Type = syn::parse_quote!(#rust_name #self_ty_generics);
-            let wasm_bindgen_path: syn::Path = syn::parse_quote!(#wasm_bindgen);
-            clause.predicates.push(syn::parse_quote!(
-                #self_ty: #wasm_bindgen_path::__rt::marker::MaybeUnwindSafe
-            ));
-            clause
+        let arg_abi_lifetimes = quote! { #(#lifetime_params,)* };
+        let arg_abi_type_params = quote! { #(#type_params_with_bounds,)* };
+        let js_value_abi = quote! {
+            <JsValue as #wasm_bindgen::convert::ArgAbi<#wasm_bindgen::convert::CallScoped>>::Abi
         };
+
+        // Owned `ImportedType` (and `Option<ImportedType>`) export
+        // arguments, with `0` as the in-band `None` sentinel.
+        let owned_arg_abi = by_value_arg_abi_impls(
+            wasm_bindgen,
+            &arg_abi_lifetimes,
+            &arg_abi_type_params,
+            &quote!(#rust_name #ty_generics),
+            &extra_where_preds,
+            &js_value_abi,
+            &quote!(#rust_name {
+                obj: <JsValue as #wasm_bindgen::convert::ArgAbi<#wasm_bindgen::convert::CallScoped>>::arg_from_abi(js).unwrap().into(),
+                #phantom_init
+            }),
+            Some(OptionEncoding {
+                option_abi: js_value_abi.clone(),
+                is_none: quote!(js == 0),
+            }),
+        );
+
+        // `&ImportedType` export arguments. Synchronous borrows ride the
+        // JS heap value for the duration of the call (borrowed handle,
+        // `ManuallyDrop`); `async` exports anchor an owned handle that
+        // lives inside the future. No `&mut`.
+        let ref_arg_abi = borrowed_arg_abi_impl(
+            wasm_bindgen,
+            &arg_abi_lifetimes,
+            &arg_abi_type_params,
+            false,
+            &quote!(#rust_name #ty_generics),
+            &extra_where_preds,
+            &quote!(u32),
+            &quote!(#wasm_bindgen::convert::Shared<
+                core::mem::ManuallyDrop<#rust_name #ty_generics>,
+            >),
+            &quote!({
+                let tmp = <&JsValue as #wasm_bindgen::convert::ArgAbi<
+                    #wasm_bindgen::convert::CallScoped,
+                >>::arg_from_abi(js);
+                #wasm_bindgen::convert::Shared(core::mem::ManuallyDrop::new(
+                    #rust_name {
+                        obj: core::mem::ManuallyDrop::into_inner(tmp.0).into(),
+                        #phantom_init
+                    },
+                ))
+            }),
+            BorrowedDescribe::Fixed {
+                scope: quote!(#wasm_bindgen::convert::CallScoped),
+                tag: quote!(REF),
+            },
+        );
+        let anchored_ref_arg_abi = borrowed_arg_abi_impl(
+            wasm_bindgen,
+            &arg_abi_lifetimes,
+            &arg_abi_type_params,
+            false,
+            &quote!(#rust_name #ty_generics),
+            &extra_where_preds,
+            &quote!(u32),
+            &quote!(#wasm_bindgen::convert::OwnedAnchor<#rust_name #ty_generics>),
+            &quote!(#wasm_bindgen::convert::OwnedAnchor(#rust_name {
+                obj: <JsValue as #wasm_bindgen::convert::ArgAbi<
+                    #wasm_bindgen::convert::CallScoped,
+                >>::arg_from_abi(js).unwrap().into(),
+                #phantom_init
+            })),
+            BorrowedDescribe::Fixed {
+                scope: quote!(#wasm_bindgen::convert::Anchored),
+                tag: quote!(LONGREF),
+            },
+        );
 
         (quote! {
             #(#attrs)*
@@ -1219,49 +1460,7 @@ impl TryToTokens for ast::ImportType {
                     }
                 }
 
-                // Owned `ImportedType` (and `Option<ImportedType>`) export
-                // arguments, with `0` as the in-band `None` sentinel.
-                #[automatically_derived]
-                impl #impl_generics_with_scope #wasm_bindgen::convert::ArgAbi<WbgScope>
-                    for #rust_name #ty_generics #arg_abi_owned_where_clause
-                {
-                    type Abi = <JsValue as #wasm_bindgen::convert::ArgAbi<#wasm_bindgen::convert::CallScoped>>::Abi;
-                    type Guard = Option<#rust_name #ty_generics>;
-
-                    #[inline(always)]
-                    unsafe fn arg_from_abi(js: Self::Abi) -> Self::Guard {
-                        Some(#rust_name {
-                            obj: <JsValue as #wasm_bindgen::convert::ArgAbi<#wasm_bindgen::convert::CallScoped>>::arg_from_abi(js).unwrap().into(),
-                            #phantom_init
-                        })
-                    }
-
-
-                    fn describe_arg() {
-                        <#rust_name #ty_generics as WasmDescribe>::describe();
-                    }
-                }
-
-                // `Option<ImportedType>` arguments, with `0` as the
-                // in-band `None` sentinel.
-                #[automatically_derived]
-                impl #impl_generics_with_scope #wasm_bindgen::convert::OptionArgAbi<WbgScope>
-                    for #rust_name #ty_generics #arg_abi_owned_where_clause
-                {
-                    type OptionAbi = <JsValue as #wasm_bindgen::convert::ArgAbi<#wasm_bindgen::convert::CallScoped>>::Abi;
-
-                    #[inline(always)]
-                    unsafe fn option_arg_from_abi(js: Self::OptionAbi) -> Option<Self> {
-                        if js == 0 {
-                            None
-                        } else {
-                            Some(#rust_name {
-                                obj: <JsValue as #wasm_bindgen::convert::ArgAbi<#wasm_bindgen::convert::CallScoped>>::arg_from_abi(js).unwrap().into(),
-                                #phantom_init
-                            })
-                        }
-                    }
-                }
+                #owned_arg_abi
 
                 #[automatically_derived]
                 impl #impl_generics_with_lifetime_a IntoWasmAbi for &'a #rust_name #ty_generics #where_clause {
@@ -1273,53 +1472,9 @@ impl TryToTokens for ast::ImportType {
                     }
                 }
 
-                // `&ImportedType` export arguments. Synchronous borrows
-                // ride the JS heap value for the duration of the call
-                // (borrowed handle, `ManuallyDrop`); `async` exports
-                // anchor an owned handle that lives inside the future.
-                // No `&mut`.
-                #wasm_bindgen::__wbindgen_borrowed_arg_abi!(
-                    impl #borrowed_impl_generics
-                        ArgAbi<#wasm_bindgen::convert::CallScoped>
-                        for &#rust_name #ty_generics
-                    where (#extra_where_preds)
-                    {
-                        type Abi = u32;
-                        type Guard = #wasm_bindgen::convert::Shared<
-                            core::mem::ManuallyDrop<#rust_name #ty_generics>,
-                        >;
-                        |js| {
-                            let tmp = <&JsValue as #wasm_bindgen::convert::ArgAbi<
-                                #wasm_bindgen::convert::CallScoped,
-                            >>::arg_from_abi(js);
-                            #wasm_bindgen::convert::Shared(core::mem::ManuallyDrop::new(
-                                #rust_name {
-                                    obj: core::mem::ManuallyDrop::into_inner(tmp.0).into(),
-                                    #phantom_init
-                                },
-                            ))
-                        };
-                        describe = REF(#rust_name #ty_generics);
-                    }
-                );
+                #ref_arg_abi
 
-                #wasm_bindgen::__wbindgen_borrowed_arg_abi!(
-                    impl #borrowed_impl_generics
-                        ArgAbi<#wasm_bindgen::convert::Anchored>
-                        for &#rust_name #ty_generics
-                    where (#extra_where_preds)
-                    {
-                        type Abi = u32;
-                        type Guard = #wasm_bindgen::convert::OwnedAnchor<#rust_name #ty_generics>;
-                        |js| #wasm_bindgen::convert::OwnedAnchor(#rust_name {
-                            obj: <JsValue as #wasm_bindgen::convert::ArgAbi<
-                                #wasm_bindgen::convert::CallScoped,
-                            >>::arg_from_abi(js).unwrap().into(),
-                            #phantom_init
-                        });
-                        describe = LONGREF(#rust_name #ty_generics);
-                    }
-                );
+                #anchored_ref_arg_abi
 
                 #[automatically_derived]
                 impl #impl_generics AsRef<JsValue> for #rust_name #ty_generics #where_clause {
@@ -1624,6 +1779,26 @@ impl ToTokens for ast::StringEnum {
 
         let wasm_bindgen = &self.wasm_bindgen;
 
+        let no_generics = quote! {};
+        let no_preds = quote! {};
+        let arg_abi = by_value_arg_abi_impls(
+            wasm_bindgen,
+            &no_generics,
+            &no_generics,
+            &quote!(#enum_name),
+            &no_preds,
+            &quote!(u32),
+            &quote!(match js {
+                #(#variant_indices => #variant_paths_ref,)*
+                #invalid => #enum_name::__Invalid,
+                _ => unreachable!("The JS binding should only ever produce a valid value or the specific 'invalid' value"),
+            }),
+            Some(OptionEncoding {
+                option_abi: quote!(u32),
+                is_none: quote!(js == #hole),
+            }),
+        );
+
         (quote! {
             #(#attrs)*
             #[non_exhaustive]
@@ -1666,18 +1841,7 @@ impl ToTokens for ast::StringEnum {
                 }
             }
 
-            #wasm_bindgen::__wbindgen_by_value_arg_abi!(
-                impl ArgAbi for #enum_name {
-                    type Abi = u32;
-                    |js| match js {
-                        #(#variant_indices => #variant_paths_ref,)*
-                        #invalid => #enum_name::__Invalid,
-                        _ => unreachable!("The JS binding should only ever produce a valid value or the specific 'invalid' value"),
-                    }
-                }
-
-                with Option (is_none = js == #hole)
-            );
+            #arg_abi
 
             #[automatically_derived]
             impl #wasm_bindgen::convert::OptionIntoWasmAbi for #enum_name {
@@ -1876,6 +2040,27 @@ impl ToTokens for ast::DynamicUnion {
         }
         let type_count = type_variants.len() as u32;
 
+        let no_generics = quote! {};
+        let no_preds = quote! {};
+        let arg_abi = by_value_arg_abi_impls(
+            wasm_bindgen,
+            &no_generics,
+            &no_generics,
+            &quote!(#enum_name),
+            &no_preds,
+            &quote!(u32),
+            &quote!({
+                let js_value = <#wasm_bindgen::JsValue as #wasm_bindgen::convert::ArgAbi<#wasm_bindgen::convert::CallScoped>>::arg_from_abi(js).unwrap();
+                #known_from_block
+                #(#fallback_from_arms)*
+                #from_abi_tail
+            }),
+            Some(OptionEncoding {
+                option_abi: quote!(u32),
+                is_none: quote!(#wasm_bindgen::__rt::is_undefined_abi(js)),
+            }),
+        );
+
         (quote! {
             #(#attrs)*
             #vis enum #enum_name {
@@ -1896,19 +2081,7 @@ impl ToTokens for ast::DynamicUnion {
                 }
             }
 
-            #wasm_bindgen::__wbindgen_by_value_arg_abi!(
-                impl ArgAbi for #enum_name {
-                    type Abi = u32;
-                    |js| {
-                        let js_value = <#wasm_bindgen::JsValue as #wasm_bindgen::convert::ArgAbi<#wasm_bindgen::convert::CallScoped>>::arg_from_abi(js).unwrap();
-                        #known_from_block
-                        #(#fallback_from_arms)*
-                        #from_abi_tail
-                    }
-                }
-
-                with Option (is_none = #wasm_bindgen::__rt::is_undefined_abi(js))
-            );
+            #arg_abi
 
             // Despite the generic implementation, we still encode the type information for TypeScript output
             #[automatically_derived]
@@ -2950,6 +3123,23 @@ impl ToTokens for ast::Enum {
         let try_from_cast_clauses = cast_clauses.clone();
         let arg_abi_cast_clauses = cast_clauses.clone();
         let wasm_bindgen = &self.wasm_bindgen;
+        let no_generics = quote! {};
+        let no_preds = quote! {};
+        let arg_abi = by_value_arg_abi_impls(
+            wasm_bindgen,
+            &no_generics,
+            &no_generics,
+            &quote!(#enum_name),
+            &no_preds,
+            &underlying,
+            &quote!(#(#arg_abi_cast_clauses else)* {
+                #wasm_bindgen::throw_str("invalid enum value passed")
+            }),
+            Some(OptionEncoding {
+                option_abi: underlying.clone(),
+                is_none: quote!(js == #hole as #underlying),
+            }),
+        );
         (quote! {
             #[automatically_derived]
             impl #wasm_bindgen::convert::IntoWasmAbi for #enum_name {
@@ -2961,16 +3151,7 @@ impl ToTokens for ast::Enum {
                 }
             }
 
-            #wasm_bindgen::__wbindgen_by_value_arg_abi!(
-                impl ArgAbi for #enum_name {
-                    type Abi = #underlying;
-                    |js| #(#arg_abi_cast_clauses else)* {
-                        #wasm_bindgen::throw_str("invalid enum value passed")
-                    }
-                }
-
-                with Option (is_none = js == #hole as #underlying)
-            );
+            #arg_abi
 
             #[automatically_derived]
             impl #wasm_bindgen::convert::OptionIntoWasmAbi for #enum_name {

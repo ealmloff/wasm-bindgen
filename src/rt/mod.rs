@@ -1110,45 +1110,26 @@ pub fn maybe_catch_unwind<F: FnOnce() -> R, R>(f: F) -> R {
     f()
 }
 
-/// Compile-time requirement that `T: RefUnwindSafe` under `panic = "unwind"`.
+/// Compile-time requirement that one exported-function argument is
+/// unwind-safe under `panic = "unwind"`, emitted by `#[wasm_bindgen]` for
+/// every argument (including the receiver) of every export.
 ///
-/// Emitted by `#[wasm_bindgen]` for the receiver type of `&self` / `&mut self`
-/// methods and the pointee of `&T` / `&mut T` arguments on exported functions.
-///
-/// Stdlib's `&mut T: !UnwindSafe` blanket means we cannot use the closure's
-/// own `UnwindSafe` bound to validate user types — every `&mut self` method
-/// would fail unconditionally. Instead, this requires the *logical* unwind
-/// safety property (`T: RefUnwindSafe`): the user's type must not contain
-/// interior mutability whose invariants could be silently broken when a
-/// panic is caught by [`maybe_catch_unwind`]. This is the same property
-/// `RefCell`, `Cell`, `Mutex` advertise when refusing to implement
-/// `RefUnwindSafe`.
-///
-/// Users whose type is genuinely safe to observe after a caught panic can
-/// opt in with `impl RefUnwindSafe for MyType {}` or by wrapping interior-
-/// mutable fields in `std::panic::AssertUnwindSafe`.
+/// `W` is the *written* argument type; its [`ArgAbi`] impl knows whether
+/// the argument is consumed by value (`UnwindSafe` on the written type) or
+/// borrows a pointee (`RefUnwindSafe` on the pointee) and carries that
+/// choice in [`ArgAbi::UnwindCheck`] — so this single call site works for
+/// any written type, including aliases the macro cannot see through. See
+/// [`marker::ArgUnwindCheck`] for the property itself and the opt-outs.
 ///
 /// No-op outside `panic = "unwind"` builds (where panics abort instead).
-#[cfg(all(target_family = "wasm", feature = "std", panic = "unwind"))]
-#[inline(always)]
-pub fn ensure_ref_unwind_safe<T: ?Sized + std::panic::RefUnwindSafe>() {}
-
-#[cfg(not(all(target_family = "wasm", feature = "std", panic = "unwind")))]
-#[inline(always)]
-pub fn ensure_ref_unwind_safe<T: ?Sized>() {}
-
-/// Compile-time requirement that `T: UnwindSafe` under `panic = "unwind"`.
 ///
-/// Used for owned receiver / argument types where the value is consumed
-/// inside the catch boundary; mirrors [`ensure_ref_unwind_safe`] but for
-/// owned-value contexts where `UnwindSafe` (rather than `RefUnwindSafe`)
-/// is the relevant property.
-///
-/// No-op outside `panic = "unwind"` builds.
-#[cfg(all(target_family = "wasm", feature = "std", panic = "unwind"))]
+/// [`ArgAbi`]: crate::convert::ArgAbi
+/// [`ArgAbi::UnwindCheck`]: crate::convert::ArgAbi::UnwindCheck
 #[inline(always)]
-pub fn ensure_unwind_safe<T: ?Sized + std::panic::UnwindSafe>() {}
-
-#[cfg(not(all(target_family = "wasm", feature = "std", panic = "unwind")))]
-#[inline(always)]
-pub fn ensure_unwind_safe<T: ?Sized>() {}
+pub fn ensure_arg_unwind_safe<W, S>()
+where
+    S: crate::convert::Scope,
+    W: crate::convert::ArgAbi<S>,
+    W::UnwindCheck: marker::ArgUnwindCheck,
+{
+}

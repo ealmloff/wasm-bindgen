@@ -247,6 +247,9 @@ where
 {
     type Abi = <T as crate::convert::ArgAbi<WbgS>>::Abi;
     type Guard = Option<AssertUnwindSafe<T>>;
+    // `AssertUnwindSafe<T>: UnwindSafe` unconditionally — this is the
+    // per-argument escape hatch from the unwind-safety check.
+    type UnwindCheck = crate::__rt::marker::OwnedCheck<AssertUnwindSafe<T>>;
 
     #[inline(always)]
     unsafe fn arg_from_abi(js: Self::Abi) -> Self::Guard {
