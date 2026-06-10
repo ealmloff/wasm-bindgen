@@ -71,6 +71,26 @@ extern "C" {
     fn parse_fallible(s: &str) -> Fallible;
 }
 
+// A *parameterized* alias of `Result` is not unwrapped syntactically (its
+// first type argument is not the Ok type); it resolves through
+// `CatchFromWasmAbi`, including with a non-`JsValue` error type.
+
+type StringResult<E> = Result<String, E>;
+
+pub struct CustomErr(#[allow(dead_code)] JsValue);
+
+impl From<JsValue> for CustomErr {
+    fn from(v: JsValue) -> Self {
+        CustomErr(v)
+    }
+}
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(catch, js_namespace = JSON, js_name = stringify)]
+    fn stringify_generic_alias(v: &JsValue) -> StringResult<CustomErr>;
+}
+
 // === Green guards: these already work and must keep working ===
 
 // Owned aliases resolve through the type system today.

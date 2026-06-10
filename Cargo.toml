@@ -93,7 +93,14 @@ type_complexity = "allow"
 uninlined_format_args = "warn"
 
 [workspace]
-exclude = ["crates/msrv/resolver", "crates/msrv/lib", "crates/msrv/cli"]
+exclude = [
+  "crates/msrv/resolver",
+  "crates/msrv/lib",
+  "crates/msrv/cli",
+  # Compiles only without -Cpanic=unwind; checked both ways by the
+  # `test-wasm-bindgen-unwind-compile-fail` justfile recipe.
+  "tests/unwind-compile-fail",
+]
 members = [
   "benchmarks",
   "benchmarks/wcodspeed",

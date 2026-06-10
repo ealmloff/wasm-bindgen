@@ -67,6 +67,13 @@ test-wasm-bindgen-unwind *ARGS="":
         --target wasm32-unknown-unknown \
         {{ARGS}}
 
+# The unwind-safety negative test: these exports must be *rejected* under
+# panic=unwind and accepted under the default panic=abort. (Not a trybuild
+# test because the failure only exists with -Cpanic=unwind + build-std.)
+test-wasm-bindgen-unwind-compile-fail:
+    cargo check --manifest-path tests/unwind-compile-fail/Cargo.toml --target wasm32-unknown-unknown
+    ! RUSTFLAGS="-Cpanic=unwind" cargo +nightly check -Zbuild-std=std,panic_unwind --manifest-path tests/unwind-compile-fail/Cargo.toml --target wasm32-unknown-unknown
+
 # Run wasm-bindgen tests with panic=unwind using legacy EH (try/catch). Useful
 # for testing compatibility with older runtimes (Node 20, older browsers).
 test-wasm-bindgen-unwind-legacy-eh *ARGS="":

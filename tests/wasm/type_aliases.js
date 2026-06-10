@@ -44,6 +44,29 @@ exports.js_async_unit_alias_err = async () => {
     throw new Error('intentional async');
 };
 
+exports.js_async_arg_aliases_work = async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+    assert.strictEqual(await wasm.ta_async_bytes_sum_alias(bytes), 10);
+    assert.strictEqual(await wasm.ta_async_js_is_null_alias(null), true);
+    assert.strictEqual(await wasm.ta_async_js_is_null_alias({}), false);
+    const c = new wasm.TaCounter(7);
+    assert.strictEqual(await wasm.ta_async_counter_get_alias(c), 7);
+    assert.strictEqual(wasm.ta_opt_u32_roundtrip(42), 42);
+    assert.strictEqual(wasm.ta_opt_u32_roundtrip(undefined), undefined);
+};
+
+exports.js_string_ok = () => 'ok-string';
+
+exports.js_string_throw = () => {
+    throw new Error('intentional sync');
+};
+
+exports.js_async_string_ok = async () => 'async-string';
+
+exports.js_async_string_err = async () => {
+    throw new Error('intentional async string');
+};
+
 exports.js_take_str = s => s === 'via alias import';
 
 exports.js_throw = () => {

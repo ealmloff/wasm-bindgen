@@ -402,26 +402,43 @@ impl UnwindSafeCounter {
     }
 }
 
-// Negative cases — these would fail to compile under `panic = "unwind"`
-// because their interior-mutable state is not `RefUnwindSafe`. They are
-// kept here as `cfg(any())` to document the intended check; uncommenting
-// either of them on a `panic = "unwind"` build produces a compile error
-// pointing at `wasm_bindgen::__rt::assert_ref_unwind_safe` with a trace
-// through the offending field type.
+// Negative cases — exports like these fail to compile under
+// `panic = "unwind"` because their interior-mutable state is not
+// `RefUnwindSafe`; they are kept compiling-checked (must *fail* under the
+// unwind cfg, must *pass* otherwise) in `tests/unwind-compile-fail`, run
+// by the `test-wasm-bindgen-unwind-compile-fail` justfile recipe.
 //
-//     #[wasm_bindgen]
-//     pub struct UnwindUnsafeCell { c: std::cell::Cell<u32> }
-//     #[wasm_bindgen]
-//     impl UnwindUnsafeCell {
-//         pub fn bump(&mut self) { self.c.set(self.c.get() + 1); }
-//     }
+// Users whose type is genuinely safe can opt out per type via
+// `impl core::panic::RefUnwindSafe for MyType {}`, or per argument by
+// wrapping it in `std::panic::AssertUnwindSafe` (see
+// `take_assert_unwind_safe` above).
+
+// -- Compile coverage: unwind-safety is asserted only at export sites --
 //
-//     #[wasm_bindgen]
-//     pub fn touch_cell(_c: &std::cell::RefCell<u32>) {}
-//
-// Users whose type is genuinely safe can opt in via either:
-//   * `impl core::panic::RefUnwindSafe for MyType {}`, or
-//   * wrapping interior-mutable fields in `std::panic::AssertUnwindSafe`.
+// These declarations must compile under *both* panic strategies. The
+// unwind-safety check lives in the generated export shim
+// (`ensure_arg_unwind_safe`), not on the `ArgAbi` impls, so:
+//   * declaring a non-unwind-safe `#[wasm_bindgen]` struct is legal,
+//   * an import may *return* it,
+//   * and `std::panic::AssertUnwindSafe` works as the per-argument
+//     escape hatch even when the inner type is not unwind-safe.
+
+#[wasm_bindgen]
+pub struct NotUnwindSafeStruct {
+    _marker: core::marker::PhantomData<&'static mut ()>,
+}
+
+#[wasm_bindgen(module = "tests/wasm/unwind.js")]
+extern "C" {
+    // Import returning a non-unwind-safe exported class: no assertion
+    // applies to import returns.
+    #[wasm_bindgen(js_name = js_check_dropped)]
+    fn js_returning_not_unwind_safe() -> NotUnwindSafeStruct;
+}
+
+// Export receiving the non-unwind-safe type through the escape hatch.
+#[wasm_bindgen]
+pub fn take_assert_unwind_safe(_x: core::panic::AssertUnwindSafe<NotUnwindSafeStruct>) {}
 
 /// Confirms that an exported `&mut self` method on a `RefUnwindSafe` struct
 /// catches its panic correctly under `panic = "unwind"` and that completed

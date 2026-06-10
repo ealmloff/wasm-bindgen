@@ -1,0 +1,12 @@
+[package]
+name = "unwind-compile-fail"
+version = "0.0.0"
+authors = ["The wasm-bindgen Developers"]
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = { path = "../.." }

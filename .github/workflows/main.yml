@@ -207,7 +207,13 @@ jobs:
         node-version: '25'
     - run: cargo test --target wasm32-unknown-unknown -Zbuild-std --lib --bins --tests
     - run: cargo test --target wasm32-unknown-unknown -Zbuild-std --test wasm --features std,wasm-bindgen-futures/std
-  
+    # Negative unwind-safety test: these exports must be *rejected* under
+    # panic=unwind and accepted otherwise — see tests/unwind-compile-fail.
+    - name: unwind compile-fail (must not compile under panic=unwind)
+      run: if cargo check --manifest-path tests/unwind-compile-fail/Cargo.toml --target wasm32-unknown-unknown -Zbuild-std; then exit 1; fi
+    - name: unwind compile-fail crate compiles without panic=unwind
+      run: RUSTFLAGS="" cargo check --manifest-path tests/unwind-compile-fail/Cargo.toml --target wasm32-unknown-unknown
+
   test_emscripten:
       name: Run Emscripten tests
       runs-on: ubuntu-latest
