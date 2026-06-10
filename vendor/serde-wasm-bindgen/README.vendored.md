@@ -1,26 +1,29 @@
 # Vendored serde-wasm-bindgen 0.6.5 (temporary)
 
-This is a vendored copy of [serde-wasm-bindgen] 0.6.5 with a minimal patch
-for wasm-bindgen's `ArgAbi` refactor, which removed the unstable
-`FromWasmAbi`/`RefFromWasmAbi` traits the published crate uses:
+This is a vendored copy of [serde-wasm-bindgen] 0.6.5 with one patch: the
+`preserve` feature no longer smuggles raw wasm-bindgen heap indices
+through serde via the unstable `wasm_bindgen::convert` traits
+(`IntoWasmAbi`/`FromWasmAbi`/`RefFromWasmAbi`, which the `ArgAbi`
+refactor removed). It instead stashes the `JsValue` in a crate-private
+thread-local stack and smuggles the stash slot — stable API only, no
+`unsafe`, works against both old and new wasm-bindgen.
 
-- `src/lib.rs` (`preserve` module): `FromWasmAbi::from_abi` →
-  `<JsValue as ArgAbi<CallScoped>>::arg_from_abi(..).unwrap()`.
-- `src/ser.rs` (`serialize_newtype_struct`): `JsValue::ref_from_abi` →
-  `<&JsValue as ArgAbi<CallScoped>>::arg_from_abi` (the guard derefs to the
-  borrowed `JsValue`, which is cloned exactly as before).
+The same patch is prepared for upstream as the
+`preserve-without-internal-abi` branch of the local clone at
+`~/Desktop/serde-wasm-bindgen`; because it only uses stable API, the
+upstream PR builds against *published* wasm-bindgen and does not need to
+wait for a wasm-bindgen release.
 
-It exists only so the in-repo `typescript-tests` and
-`examples/raytrace-parallel` workspace members keep building; it is wired up
-via `[patch.crates-io]` in the root `Cargo.toml` and excluded from the
+This copy exists only so the in-repo `typescript-tests` and
+`examples/raytrace-parallel` workspace members keep building; it is wired
+up via `[patch.crates-io]` in the root `Cargo.toml` and excluded from the
 workspace.
 
 **Delete this directory, the `[patch.crates-io]` entry, and the
-`[workspace] exclude` line once upstream serde-wasm-bindgen releases a
-version compatible with the `ArgAbi` API.** Publishing wasm-bindgen to
-crates.io is blocked on that upstream release regardless — external users
-of serde-wasm-bindgen (and of crates like `tsify` and
-`wasm-bindgen-derive` that use the removed traits) get no benefit from
-this in-repo patch.
+`[workspace] exclude` line once upstream serde-wasm-bindgen releases with
+the patch.** Publishing wasm-bindgen to crates.io is blocked on that
+release regardless — external users of serde-wasm-bindgen ≤ 0.6.5 (and
+of crates like `tsify` and `wasm-bindgen-derive` that also use the
+removed traits) get no benefit from this in-repo copy.
 
 [serde-wasm-bindgen]: https://github.com/RReverser/serde-wasm-bindgen

@@ -58,9 +58,11 @@
   (≤ 0.6.5), which uses `RefFromWasmAbi`, and other crates that implement
   or name the removed traits (e.g. `tsify`, `wasm-bindgen-derive`); the
   in-repo `typescript-tests` and `raytrace-parallel` members build against
-  a temporarily vendored, patched copy under `vendor/serde-wasm-bindgen`
-  (see the tracking note there), and publishing to crates.io is blocked on
-  a compatible upstream `serde-wasm-bindgen` release.
+  a temporarily vendored copy under `vendor/serde-wasm-bindgen` patched to
+  use only stable wasm-bindgen API (see the tracking note there — the same
+  patch is upstreamable independently of any wasm-bindgen release), and
+  publishing to crates.io is blocked on an upstream `serde-wasm-bindgen`
+  release containing it.
 
 * Other internal (`⚠️ Unstable`) `__rt` items changed alongside:
   `__rt::ensure_unwind_safe`/`__rt::ensure_ref_unwind_safe` were replaced

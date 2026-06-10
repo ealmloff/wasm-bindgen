@@ -2,7 +2,6 @@ use js_sys::{Array, ArrayBuffer, JsString, Map, Number, Object, Symbol, Uint8Arr
 use serde::de::value::{MapDeserializer, SeqDeserializer};
 use serde::de::{self, IntoDeserializer};
 use std::convert::TryFrom;
-use wasm_bindgen::convert::IntoWasmAbi;
 use wasm_bindgen::{JsCast, JsValue, UnwrapThrowExt};
 
 use crate::preserve::PRESERVED_VALUE_MAGIC;
@@ -130,9 +129,11 @@ impl<'de> de::SeqAccess<'de> for PreservedValueAccess {
                 seed.deserialize(str_deserializer(PRESERVED_VALUE_MAGIC))
                     .map(Some)
             }
+            // Stash the value and smuggle its stash slot to
+            // `preserve::deserialize`, which pops it right back out.
             Self::OnValue(value) => seed
                 .deserialize(Deserializer {
-                    value: JsValue::from(value.into_abi()),
+                    value: JsValue::from(crate::preserve::stash(value)),
                 })
                 .map(Some),
             Self::Done => Ok(None),

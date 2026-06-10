@@ -1,6 +1,5 @@
 use js_sys::{Array, JsString, Map, Number, Object, Uint8Array};
 use serde::ser::{self, Error as _, Serialize};
-use wasm_bindgen::convert::{ArgAbi, CallScoped};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
@@ -442,12 +441,12 @@ impl<'s> ser::Serializer for &'s Serializer {
         value: &T,
     ) -> Result {
         if name == PRESERVED_VALUE_MAGIC {
-            let abi = value.serialize(self)?.unchecked_into_f64() as u32;
-            // `PreservedValueSerWrapper` gives us ABI of a reference to a `JsValue` that is
-            // guaranteed to be alive only during this call.
-            // We must clone it before giving away the value to the caller.
-            let anchor = unsafe { <&JsValue as ArgAbi<CallScoped>>::arg_from_abi(abi) };
-            return Ok(JsValue::clone(&anchor));
+            // `PreservedValueSerWrapper` stashed the value and smuggled its
+            // stash slot to us; pop the value right back out.
+            let slot = value.serialize(self)?.unchecked_into_f64() as u32;
+            return crate::preserve::take_stashed(slot).ok_or_else(|| {
+                Error::custom("preserved value was not stashed by serde-wasm-bindgen")
+            });
         }
         value.serialize(self)
     }

@@ -103,13 +103,51 @@ pub fn to_value<T: serde::ser::Serialize + ?Sized>(value: &T) -> Result<JsValue>
 /// `js_field` will be an `Int8Array` pointing to the same underlying JavaScript object as `s.js_field` does.
 pub mod preserve {
     use serde::{de::Error, Deserialize, Serialize};
-    use wasm_bindgen::{
-        convert::{ArgAbi, CallScoped, IntoWasmAbi},
-        JsCast, JsValue,
-    };
+    use std::cell::RefCell;
+    use wasm_bindgen::{JsCast, JsValue};
 
     // Some arbitrary string that no one will collide with unless they try.
     pub(crate) const PRESERVED_VALUE_MAGIC: &str = "1fc430ca-5b7f-4295-92de-33cf2b145d38";
+
+    std::thread_local! {
+        /// Values being passed between the `preserve` entry points and our
+        /// `Serializer`/`Deserializer` out-of-band: serde's data model
+        /// cannot carry a `JsValue`, so one side stashes the value here and
+        /// smuggles its stack slot through serde as a number, and the other
+        /// side pops it right back.
+        ///
+        /// Each stash is popped by the very next serde event (nothing can
+        /// interleave between a wrapper's `serialize`/`deserialize` and the
+        /// matching MAGIC branch), so this behaves as a stack. A foreign
+        /// serializer/deserializer that takes the MAGIC branch's place
+        /// never pops, in which case the slot check below fails cleanly
+        /// (and the stashed clone leaks instead of anything unsound
+        /// happening).
+        static STASH: RefCell<Vec<JsValue>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Stash a value for the matching [`take_stashed`] and return its slot.
+    pub(crate) fn stash(value: JsValue) -> u32 {
+        STASH.with(|stash| {
+            let mut stash = stash.borrow_mut();
+            stash.push(value);
+            stash.len() as u32 - 1
+        })
+    }
+
+    /// Take back a [`stash`]ed value; `None` if `slot` is not the top of
+    /// the stash (a protocol violation, e.g. a value that went through a
+    /// foreign serializer).
+    pub(crate) fn take_stashed(slot: u32) -> Option<JsValue> {
+        STASH.with(|stash| {
+            let mut stash = stash.borrow_mut();
+            if stash.len() as u32 == slot + 1 {
+                stash.pop()
+            } else {
+                None
+            }
+        })
+    }
 
     struct Magic;
 
@@ -153,10 +191,9 @@ pub mod preserve {
     ///
     /// This function is compatible with the `serde(serialize_with)` derive annotation.
     pub fn serialize<S: serde::Serializer, T: JsCast>(val: &T, ser: S) -> Result<S::Ok, S::Error> {
-        // It's responsibility of serde-wasm-bindgen's Serializer to clone the value.
-        // For all other serializers, using reference instead of cloning here will ensure that we don't
-        // create accidental leaks.
-        PreservedValueSerWrapper(val.as_ref().into_abi()).serialize(ser)
+        // The matching MAGIC branch in our `Serializer` pops this clone
+        // right back out of the stash.
+        PreservedValueSerWrapper(stash(val.as_ref().clone())).serialize(ser)
     }
 
     /// Deserialize any `JsCast` value.
@@ -167,17 +204,14 @@ pub mod preserve {
     /// This function is compatible with the `serde(deserialize_with)` derive annotation.
     pub fn deserialize<'de, D: serde::Deserializer<'de>, T: JsCast>(de: D) -> Result<T, D::Error> {
         let wrap = PreservedValueDeWrapper::deserialize(de)?;
-        // When used with our deserializer this unsafe is correct, because the
-        // deserializer just converted a JsValue into_abi.
-        //
-        // Other deserializers are unlikely to end up here, thanks
-        // to the asymmetry between PreservedValueSerWrapper and
-        // PreservedValueDeWrapper. Even if some other deserializer ends up
-        // here, this may be incorrect but it shouldn't be UB because JsValues
-        // are represented using indices into a JS-side (i.e. bounds-checked)
-        // array.
-        let val: JsValue =
-            unsafe { <JsValue as ArgAbi<CallScoped>>::arg_from_abi(wrap.1) }.unwrap();
+        // When used with our deserializer, the deserializer just stashed
+        // this value. Other deserializers won't have stashed anything (and
+        // are unlikely to end up here at all, thanks to the asymmetry
+        // between PreservedValueSerWrapper and PreservedValueDeWrapper),
+        // which the slot check turns into a clean error.
+        let val: JsValue = take_stashed(wrap.1).ok_or_else(|| {
+            D::Error::custom("preserved value was not stashed by serde-wasm-bindgen")
+        })?;
         val.dyn_into().map_err(|e| {
             D::Error::custom(format_args!(
                 "incompatible JS value {e:?} for type {}",
