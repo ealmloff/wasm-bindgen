@@ -6,10 +6,13 @@
 ### Added
 
 * Type aliases are now supported in `#[wasm_bindgen]` export argument
-  position and ordinary `catch` import return position. These conversions
-  are resolved through new type-system traits (`convert::ArgAbi<Scope>`
-  and `convert::CatchFromWasmAbi`) instead of the macro matching on the
-  written type syntax, so e.g. `type Bytes<'a> = &'a [u8];` or
+  position and `catch` import return position (synchronous and `async`,
+  including parameterized aliases like
+  `type StringResult<E> = Result<String, E>;` and non-`JsValue` error
+  types). These conversions are resolved through new type-system traits
+  (`convert::ArgAbi<Scope>` and `convert::CatchFromWasmAbi`) instead of
+  the macro matching on the written type syntax, so e.g.
+  `type Bytes<'a> = &'a [u8];` or
   `type Fallible = Result<JsValue, JsValue>;` behave identically to their
   expansions. `catch` constructors and `catch` import returns that mention
   the import function's own generic or lifetime params still require a
@@ -17,12 +20,23 @@
 
 ### Changed
 
-* Unwind-safety of export arguments is now enforced via
-  `MaybeUnwindSafe`/`MaybeRefUnwindSafe` marker bounds on the `ArgAbi`
-  impls rather than `ensure_unwind_safe` assertions in generated code; the
-  requirements (and accepted programs) are unchanged, but the error
-  message for a non-unwind-safe argument under `panic = "unwind"` points
-  at the trait bound instead.
+* Unwind-safety of export arguments under `panic = "unwind"` is enforced
+  exactly as before (owned arguments must be `UnwindSafe`; `&T`/`&mut T`
+  arguments and receivers require `T: RefUnwindSafe`; nothing is asserted
+  for import returns, closures, or casts, and `std::panic::AssertUnwindSafe`
+  remains the per-argument opt-out), but the check is now carried by the
+  `ArgAbi::UnwindCheck` associated type and a per-argument
+  `__rt::ensure_arg_unwind_safe` call in the export shim, so it sees
+  through type aliases. Only the diagnostic text differs (it names the
+  internal `ArgUnwindCheck` bound).
+
+* A `catch` import whose written return type is a *parameterized* type
+  alias (e.g. `type StringResult<E> = Result<String, E>;` written as
+  `StringResult<JsValue>`) previously mis-unwrapped the alias's first type
+  argument as the Ok type, silently producing wrong conversions. The
+  syntactic unwrap is now gated on the written path actually ending in
+  `Result`; anything else (parameterized aliases, renamed `Result`s)
+  resolves correctly through `convert::CatchFromWasmAbi`.
 
 ### Fixed
 
@@ -41,9 +55,17 @@
   borrowing a heap value without freeing its index is
   `core::mem::ManuallyDrop::new(JsValue::from(...))`-style handling inside
   the relevant impl. Notably this breaks published `serde-wasm-bindgen`
-  (≤ 0.6.5), which uses `RefFromWasmAbi`; the in-repo `typescript-tests`
-  and `raytrace-parallel` targets that depend on it will not build until a
-  patched `serde-wasm-bindgen` is released.
+  (≤ 0.6.5), which uses `RefFromWasmAbi`, and other crates that implement
+  or name the removed traits (e.g. `tsify`, `wasm-bindgen-derive`); the
+  in-repo `typescript-tests` and `raytrace-parallel` members build against
+  a temporarily vendored, patched copy under `vendor/serde-wasm-bindgen`
+  (see the tracking note there), and publishing to crates.io is blocked on
+  a compatible upstream `serde-wasm-bindgen` release.
+
+* Other internal (`⚠️ Unstable`) `__rt` items changed alongside:
+  `__rt::ensure_unwind_safe`/`__rt::ensure_ref_unwind_safe` were replaced
+  by `__rt::ensure_arg_unwind_safe`, and `__rt::is_undefined_abi` was
+  added. None of these are public API.
 
 --------------------------------------------------------------------------------
 

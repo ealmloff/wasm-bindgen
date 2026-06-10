@@ -76,11 +76,15 @@ converted through a single trait:
 ```rust
 pub trait ArgAbi<S: Scope> {
     type Abi: WasmAbi;
-    type Guard;
-    type Projected<'a> where Self: 'a;
+    type Guard: ArgGuard;
+    type UnwindCheck;
     unsafe fn arg_from_abi(abi: Self::Abi) -> Self::Guard;
-    fn project<'a>(guard: &'a mut Self::Guard) -> Self::Projected<'a> where Self: 'a;
     fn describe_arg();
+}
+
+pub trait ArgGuard {
+    type Projected<'a> where Self: 'a;
+    fn project(&mut self) -> Self::Projected<'_>;
 }
 
 pub trait OptionArgAbi<S: Scope>: Sized {
@@ -91,12 +95,16 @@ pub trait OptionArgAbi<S: Scope>: Sized {
 
 `ArgAbi<S>` is dispatched on the *written* argument type — which is what
 makes type aliases work, since trait resolution sees through aliases where
-the macro's view of the syntax cannot. Owned values, references, and
-`Option`s are all plain impls of this one trait:
+the macro's view of the syntax cannot. How a decoded argument is handed to
+the user's function is a property of the *guard* (`ArgGuard`), written
+once per guard shape (`Option<T>` for owned values, `Shared<G>` /
+`Exclusive<G>` / `OwnedAnchor<T>` for borrows) rather than once per
+argument type. Owned values, references, and `Option`s are all plain
+impls of the one trait:
 
 * **Owned types** (primitives, `String`, `Vec<T>`, `JsValue`, exported
   structs and enums by value, …) use the decoded value itself as the
-  `Guard` and hand it over in `project`.
+  `Guard` (`Option<Self>`) and projection hands it over.
 * **References** like `&str`, `&[u8]`, `&mut [u8]`, `&JsValue`, and
   `&ExportedStruct` decode into an owning `Guard` (e.g. `Box<str>`, a
   reference-counted class anchor) and project a borrow of it; the
@@ -111,6 +119,13 @@ the macro's view of the syntax cannot. Owned values, references, and
   *element* — `#[wasm_bindgen]` emits the `OptionArgAbi` impl alongside
   the type, and types without an `Option` encoding simply don't implement
   it.
+
+`UnwindCheck` carries each argument's unwind-safety requirement under
+`panic = "unwind"` (`UnwindSafe` for owned values, pointee
+`RefUnwindSafe` for borrows); export shims assert it per argument via
+`__rt::ensure_arg_unwind_safe`, so declaring or returning a
+non-unwind-safe type stays legal — only receiving one in an export is
+rejected.
 
 Imported functions' return values and the `Ok` side of
 `#[wasm_bindgen(catch)]` results use the by-value case of the same trait
