@@ -112,40 +112,43 @@ pub mod preserve {
     std::thread_local! {
         /// Values being passed between the `preserve` entry points and our
         /// `Serializer`/`Deserializer` out-of-band: serde's data model
-        /// cannot carry a `JsValue`, so one side stashes the value here and
-        /// smuggles its stack slot through serde as a number, and the other
-        /// side pops it right back.
+        /// cannot carry a `JsValue`, so one side stashes the value in this
+        /// slab and smuggles its slot through serde as a number, and the
+        /// other side takes it back out.
         ///
-        /// Each stash is popped by the very next serde event (nothing can
-        /// interleave between a wrapper's `serialize`/`deserialize` and the
-        /// matching MAGIC branch), so this behaves as a stack. A foreign
-        /// serializer/deserializer that takes the MAGIC branch's place
-        /// never pops, in which case the slot check below fails cleanly
-        /// (and the stashed clone leaks instead of anything unsound
-        /// happening).
-        static STASH: RefCell<Vec<JsValue>> = const { RefCell::new(Vec::new()) };
+        /// In a plain round-trip the take happens immediately after the
+        /// stash, but serde adaptors that buffer and replay events may
+        /// reorder or interleave the two halves, so slots are taken by id
+        /// rather than in stack order. A foreign serializer/deserializer
+        /// that takes the MAGIC branch's place never takes its slot: the
+        /// take of a never-stashed slot fails cleanly instead of
+        /// producing a wrong value, and a stale entry is dropped once the
+        /// slots above it drain.
+        static STASH: RefCell<Vec<Option<JsValue>>> = const { RefCell::new(Vec::new()) };
     }
 
     /// Stash a value for the matching [`take_stashed`] and return its slot.
     pub(crate) fn stash(value: JsValue) -> u32 {
         STASH.with(|stash| {
             let mut stash = stash.borrow_mut();
-            stash.push(value);
+            stash.push(Some(value));
             stash.len() as u32 - 1
         })
     }
 
-    /// Take back a [`stash`]ed value; `None` if `slot` is not the top of
-    /// the stash (a protocol violation, e.g. a value that went through a
-    /// foreign serializer).
+    /// Take back a [`stash`]ed value; `None` if `slot` was never stashed
+    /// or was already taken (a protocol violation, e.g. a value that went
+    /// through a foreign serializer).
     pub(crate) fn take_stashed(slot: u32) -> Option<JsValue> {
         STASH.with(|stash| {
             let mut stash = stash.borrow_mut();
-            if stash.len() as u32 == slot + 1 {
-                stash.pop()
-            } else {
-                None
+            let value = stash.get_mut(slot as usize)?.take();
+            // Compact the tail so the slab is empty again once all
+            // in-flight values have been taken.
+            while let Some(None) = stash.last() {
+                stash.pop();
             }
+            value
         })
     }
 
