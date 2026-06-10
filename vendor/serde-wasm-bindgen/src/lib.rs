@@ -109,47 +109,59 @@ pub mod preserve {
     // Some arbitrary string that no one will collide with unless they try.
     pub(crate) const PRESERVED_VALUE_MAGIC: &str = "1fc430ca-5b7f-4295-92de-33cf2b145d38";
 
-    std::thread_local! {
-        /// Values being passed between the `preserve` entry points and our
-        /// `Serializer`/`Deserializer` out-of-band: serde's data model
-        /// cannot carry a `JsValue`, so one side stashes the value in this
-        /// slab and smuggles its slot through serde as a number, and the
-        /// other side takes it back out.
-        ///
-        /// In a plain round-trip the take happens immediately after the
-        /// stash, but serde adaptors that buffer and replay events may
-        /// reorder or interleave the two halves, so slots are taken by id
-        /// rather than in stack order. A foreign serializer/deserializer
-        /// that takes the MAGIC branch's place never takes its slot: the
-        /// take of a never-stashed slot fails cleanly instead of
-        /// producing a wrong value, and a stale entry is dropped once the
-        /// slots above it drain.
-        static STASH: RefCell<Vec<Option<JsValue>>> = const { RefCell::new(Vec::new()) };
+    /// A slab of values being passed between the `preserve` entry points
+    /// and our `Serializer`/`Deserializer` out-of-band: serde's data
+    /// model cannot carry a `JsValue`, so one side stashes the value here
+    /// and smuggles its slot through serde as a number, and the other
+    /// side takes it back out.
+    ///
+    /// In a plain round-trip the take happens immediately after the
+    /// stash, but serde adaptors that buffer and replay events may
+    /// reorder or interleave the two halves, so slots are taken by id
+    /// rather than in stack order. A foreign serializer/deserializer that
+    /// takes the MAGIC branch's place never takes its slot: the take of a
+    /// never-stashed slot fails cleanly instead of producing a wrong
+    /// value, and a stale entry is dropped once the slots above it drain.
+    struct Stash {
+        slots: Vec<Option<JsValue>>,
     }
 
-    /// Stash a value for the matching [`take_stashed`] and return its slot.
-    pub(crate) fn stash(value: JsValue) -> u32 {
-        STASH.with(|stash| {
-            let mut stash = stash.borrow_mut();
-            stash.push(Some(value));
-            stash.len() as u32 - 1
-        })
-    }
+    impl Stash {
+        const fn new() -> Self {
+            Self { slots: Vec::new() }
+        }
 
-    /// Take back a [`stash`]ed value; `None` if `slot` was never stashed
-    /// or was already taken (a protocol violation, e.g. a value that went
-    /// through a foreign serializer).
-    pub(crate) fn take_stashed(slot: u32) -> Option<JsValue> {
-        STASH.with(|stash| {
-            let mut stash = stash.borrow_mut();
-            let value = stash.get_mut(slot as usize)?.take();
+        /// Stash a value for the matching [`Stash::take`] and return its
+        /// slot.
+        fn stash(&mut self, value: JsValue) -> u32 {
+            self.slots.push(Some(value));
+            self.slots.len() as u32 - 1
+        }
+
+        /// Take back a [`stash`](Stash::stash)ed value; `None` if `slot`
+        /// was never stashed or was already taken (a protocol violation,
+        /// e.g. a value that went through a foreign serializer).
+        fn take(&mut self, slot: u32) -> Option<JsValue> {
+            let value = self.slots.get_mut(slot as usize)?.take();
             // Compact the tail so the slab is empty again once all
             // in-flight values have been taken.
-            while let Some(None) = stash.last() {
-                stash.pop();
+            while let Some(None) = self.slots.last() {
+                self.slots.pop();
             }
             value
-        })
+        }
+    }
+
+    std::thread_local! {
+        static STASH: RefCell<Stash> = const { RefCell::new(Stash::new()) };
+    }
+
+    pub(crate) fn stash(value: JsValue) -> u32 {
+        STASH.with(|stash| stash.borrow_mut().stash(value))
+    }
+
+    pub(crate) fn take_stashed(slot: u32) -> Option<JsValue> {
+        STASH.with(|stash| stash.borrow_mut().take(slot))
     }
 
     struct Magic;
