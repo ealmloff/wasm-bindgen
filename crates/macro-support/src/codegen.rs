@@ -3061,6 +3061,14 @@ impl TryToTokens for DescribeImport<'_> {
             .collect::<Result<Vec<syn::Type>, Diagnostic>>()?;
         let nargs = f.function.arguments.len() as u32;
         let inform_ret = match &f.js_ret {
+            // Async catch import whose `Result` wasn't syntactically
+            // unwrapped: like every async import, the shim's return value
+            // is the promise itself (an externref), not the eventual Ok
+            // type — describing the Ok type would make the JS glue discard
+            // the promise.
+            Some(_) if f.catch && !f.catch_unwrapped && f.function.r#async => {
+                quote! { <JsValue as WasmDescribe>::describe(); }
+            }
             // Catch import whose `Result` wasn't syntactically unwrapped:
             // describe the success type through `CatchFromWasmAbi` (a catch
             // import is described by its unwrapped Ok type; the thrown
