@@ -418,10 +418,10 @@ impl DataSegmentView {
     }
 
     /// `#[repr(C)] Schema` field byte offsets for the target pointer
-    /// width. Layout: `tag: u32`, then pointer-aligned `words: *const
-    /// u32`, `words_len: usize`, `children: *const *const Schema`,
-    /// `children_len: usize`. On wasm64 the `u32` tag is followed by 4
-    /// bytes of padding before the first 8-byte-aligned pointer.
+    /// width. Layout: `tag: u32`, then pointer-aligned `StaticSlice<u32>`
+    /// (`ptr`, `len`) followed by `StaticSlice<&Schema>` (`ptr`, `len`).
+    /// On wasm64 the `u32` tag is followed by 4 bytes of padding before the
+    /// first 8-byte-aligned pointer.
     fn schema_field_offsets(&self) -> SchemaOffsets {
         let p = self.ptr_size;
         let words = p; // align_up(4, ptr_size): 4 on wasm32, 8 on wasm64

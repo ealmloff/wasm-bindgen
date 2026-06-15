@@ -14,6 +14,37 @@ use cfg_if::cfg_if;
 
 pub use wasm_bindgen_shared::tys::*;
 
+/// A `repr(C)` view of a `'static` slice.
+///
+/// Rust slice fat pointers do not have a stable `repr(C)` field layout, but
+/// the CLI needs to read schema nodes from wasm data segments. This keeps the
+/// layout explicit while centralizing the pointer/length invariant.
+#[repr(C)]
+pub struct StaticSlice<T: 'static> {
+    /// Base of a `len`-long run. Empty runs use a valid sentinel pointer.
+    ptr: &'static T,
+    len: usize,
+}
+
+impl<T: 'static> StaticSlice<T> {
+    const fn new(slice: &'static [T], empty: &'static T) -> StaticSlice<T> {
+        StaticSlice {
+            ptr: if slice.is_empty() { empty } else { &slice[0] },
+            len: slice.len(),
+        }
+    }
+
+    const fn as_slice(&self) -> &'static [T] {
+        // SAFETY: `ptr` points at the first of `len` contiguous `'static`
+        // elements, or at a valid sentinel when `len == 0`.
+        unsafe { core::slice::from_raw_parts(self.ptr as *const T, self.len) }
+    }
+
+    const fn len(&self) -> usize {
+        self.len
+    }
+}
+
 /// A node in the reference-based wasm-bindgen type schema tree.
 ///
 /// Each `WasmDescribe` impl exposes its schema as a single
@@ -27,10 +58,10 @@ pub use wasm_bindgen_shared::tys::*;
 ///
 /// `#[repr(C)]` so `wasm-bindgen-cli-support` can parse the node out of
 /// the linked module's data segment deterministically. The structural
-/// fields use thin base pointers plus explicit lengths (rather than
-/// `&'static [T]` fat-pointer slices, whose field order is not
-/// `#[repr(C)]`-stable) so the layout is fully determined for the CLI
-/// parser. Empty runs use `*_len == 0` with a `'static` sentinel base.
+/// fields use [`StaticSlice`]: thin base pointers plus explicit lengths
+/// rather than `&'static [T]` fat-pointer slices, whose field order is not
+/// `#[repr(C)]`-stable, so the layout is fully determined for the CLI
+/// parser. Empty runs use `len == 0` with a `'static` sentinel base.
 ///
 /// The flat `u32` opcode stream a schema represents is its `words`
 /// followed by each child's flattened stream, in order (see
@@ -44,26 +75,22 @@ pub struct Schema {
     /// `SCHEMA_NODE_CAT`. Informational for flattening (which is
     /// uniform); used by the CLI as a validation/documentation aid.
     pub tag: u32,
-    /// Base of a `words_len`-long run of opcode words.
-    pub words: &'static u32,
-    pub words_len: usize,
-    /// Base of a `children_len`-long run of child schema references.
-    pub children: &'static &'static Schema,
-    pub children_len: usize,
+    /// Opcode words contributed by this node.
+    pub words: StaticSlice<u32>,
+    /// Child schema references flattened after this node's words.
+    pub children: StaticSlice<&'static Schema>,
 }
 
 // `Schema` contains only shared references, so it is automatically
 // `Sync`; the explicit empty sentinels below rely on that.
 
-/// Sentinel for empty `words` runs (`words_len == 0`); never read.
+/// Sentinel for empty `words` runs (`len == 0`); never read.
 static EMPTY_WORD: u32 = 0;
-/// Sentinel pointee for empty `children` runs (`children_len == 0`).
+/// Sentinel pointee for empty `children` runs (`len == 0`).
 static EMPTY_CHILD: Schema = Schema {
     tag: SCHEMA_NODE_LEAF,
-    words: &EMPTY_WORD,
-    words_len: 0,
-    children: &EMPTY_CHILD_PTR,
-    children_len: 0,
+    words: StaticSlice::new(&[], &EMPTY_WORD),
+    children: StaticSlice::new(&[], &EMPTY_CHILD_PTR),
 };
 /// Sentinel base pointer for empty `children` runs; never read.
 static EMPTY_CHILD_PTR: &Schema = &EMPTY_CHILD;
@@ -83,18 +110,8 @@ impl Schema {
     ) -> Schema {
         Schema {
             tag,
-            words: if words.is_empty() {
-                &EMPTY_WORD
-            } else {
-                &words[0]
-            },
-            words_len: words.len(),
-            children: if children.is_empty() {
-                &EMPTY_CHILD_PTR
-            } else {
-                &children[0]
-            },
-            children_len: children.len(),
+            words: StaticSlice::new(words, &EMPTY_WORD),
+            children: StaticSlice::new(children, &EMPTY_CHILD_PTR),
         }
     }
 
@@ -104,28 +121,20 @@ impl Schema {
     }
 }
 
-/// Reconstruct a node's `words` run as a slice. Const-safe: the base
-/// pointer was taken from element 0 of a `'static` array of exactly
-/// `words_len` elements, so the provenance covers the whole run.
+/// Reconstruct a node's `words` run as a slice.
 const fn words_slice(s: &Schema) -> &[u32] {
-    // SAFETY: `s.words` points at the first of `s.words_len` contiguous
-    // `'static` `u32`s (or the empty sentinel when `words_len == 0`).
-    unsafe { core::slice::from_raw_parts(s.words as *const u32, s.words_len) }
+    s.words.as_slice()
 }
 
 /// Reconstruct a node's `children` run as a slice. See [`words_slice`].
 const fn children_slice(s: &Schema) -> &[&'static Schema] {
-    // SAFETY: `s.children` points at the first of `s.children_len`
-    // contiguous `'static` `&Schema`s (or the empty sentinel).
-    unsafe {
-        core::slice::from_raw_parts(s.children as *const &'static Schema, s.children_len)
-    }
+    s.children.as_slice()
 }
 
 /// Number of `u32` words the flattened schema occupies: this node's
 /// `words` plus every child's flattened length, recursively.
 pub const fn flatten_len(s: &Schema) -> usize {
-    let mut total = s.words_len;
+    let mut total = s.words.len();
     let kids = children_slice(s);
     let mut i = 0;
     while i < kids.len() {
