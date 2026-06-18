@@ -36,6 +36,12 @@ extern "C" {
     pub type LifetimeAndType<'a, T>;
 }
 
+#[wasm_bindgen]
+pub fn borrowed_lifetime_only_static(_x: &LifetimeOnly<'static>) {}
+
+#[wasm_bindgen]
+pub async fn borrowed_lifetime_only_static_async(_x: &LifetimeOnly<'static>) {}
+
 #[wasm_bindgen_test]
 fn generic_with_default_import_type() {
     // This test verifies that when an imported type has a generic parameter

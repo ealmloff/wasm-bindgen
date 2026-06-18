@@ -1,6 +1,7 @@
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::borrow::Borrow;
 use core::mem::{self, MaybeUninit};
 use core::ops::{Deref, DerefMut};
 use core::str;
@@ -8,9 +9,10 @@ use core::str;
 use crate::__rt::{marker::ErasableGeneric, WasmWord};
 use crate::__wbindgen_copy_to_typed_array;
 use crate::convert::{
-    js_value_vector_from_abi, js_value_vector_into_abi, FromWasmAbi, IntoWasmAbi,
-    LongRefFromWasmAbi, OptionFromWasmAbi, OptionIntoWasmAbi, RefFromWasmAbi, RefMutFromWasmAbi,
-    UpcastFrom, VectorFromWasmAbi, VectorIntoWasmAbi, WasmAbi,
+    describe_long_ref_arg, describe_ref_arg, describe_ref_mut_arg, js_value_vector_from_abi,
+    js_value_vector_into_abi, Anchored, ArgAbi, ArgAbiProject, BorrowScope, CallScoped,
+    FromWasmAbi, IntoWasmAbi, OptionFromWasmAbi, OptionIntoWasmAbi, UpcastFrom, VectorFromWasmAbi,
+    VectorIntoWasmAbi, WasmAbi,
 };
 use crate::describe::*;
 use crate::JsValue;
@@ -204,35 +206,74 @@ macro_rules! vectors_internal {
             }
         }
 
-        impl RefFromWasmAbi for [$t] {
+        impl ArgAbi<CallScoped> for &[$t] {
             type Abi = WasmSlice;
+            type Value = ();
             type Anchor = Box<[$t]>;
+            type UnwindCheck = *const [$t];
+
+            #[cfg_attr(wasm_bindgen_unstable_test_coverage, coverage(off))]
+            fn describe_arg() {
+                describe_ref_arg::<[$t]>();
+            }
 
             #[inline]
-            unsafe fn ref_from_abi(js: WasmSlice) -> Box<[$t]> {
-                <Box<[$t]>>::from_abi(js)
+            unsafe fn arg_from_abi(js: WasmSlice) -> (Self::Value, Self::Anchor) {
+                ((), <Box<[$t]>>::from_abi(js))
             }
         }
 
-        impl RefMutFromWasmAbi for [$t] {
-            type Abi = WasmMutSlice;
-            type Anchor = MutSlice<$t>;
+        impl<'a> ArgAbiProject<'a, CallScoped> for &'a [$t] {
+            fn project(_value: Self::Value, anchor: &'a mut Self::Anchor) -> Self {
+                anchor
+            }
+        }
+
+        impl ArgAbi<Anchored> for &[$t] {
+            type Abi = WasmSlice;
+            type Value = ();
+            type Anchor = Box<[$t]>;
+            type UnwindCheck = *const [$t];
+
+            #[cfg_attr(wasm_bindgen_unstable_test_coverage, coverage(off))]
+            fn describe_arg() {
+                describe_long_ref_arg::<[$t]>();
+            }
 
             #[inline]
-            unsafe fn ref_mut_from_abi(js: WasmMutSlice) -> MutSlice<$t> {
+            unsafe fn arg_from_abi(js: WasmSlice) -> (Self::Value, Self::Anchor) {
+                <&[$t] as ArgAbi<CallScoped>>::arg_from_abi(js)
+            }
+        }
+
+        impl<'a> ArgAbiProject<'a, Anchored> for &'a [$t] {
+            fn project(_value: Self::Value, anchor: &'a mut Self::Anchor) -> Self {
+                <Box<[$t]> as Borrow<[$t]>>::borrow(anchor)
+            }
+        }
+
+        impl<S: BorrowScope> ArgAbi<S> for &mut [$t] {
+            type Abi = WasmMutSlice;
+            type Value = ();
+            type Anchor = MutSlice<$t>;
+            type UnwindCheck = *const [$t];
+
+            #[cfg_attr(wasm_bindgen_unstable_test_coverage, coverage(off))]
+            fn describe_arg() {
+                describe_ref_mut_arg::<[$t]>();
+            }
+
+            #[inline]
+            unsafe fn arg_from_abi(js: WasmMutSlice) -> (Self::Value, Self::Anchor) {
                 let contents = <Box<[$t]>>::from_abi(js.slice);
                 let js = JsValue::from_abi(js.idx);
-                MutSlice { contents, js }
+                ((), MutSlice { contents, js })
             }
         }
 
-        impl LongRefFromWasmAbi for [$t] {
-            type Abi = WasmSlice;
-            type Anchor = Box<[$t]>;
-
-            #[inline]
-            unsafe fn long_ref_from_abi(js: WasmSlice) -> Box<[$t]> {
-                Self::ref_from_abi(js)
+        impl<'a, S: BorrowScope> ArgAbiProject<'a, S> for &'a mut [$t] {
+            fn project(_value: Self::Value, anchor: &'a mut Self::Anchor) -> Self {
+                anchor
             }
         }
     };
@@ -457,26 +498,6 @@ impl OptionIntoWasmAbi for &str {
     #[inline]
     fn none() -> Self::Abi {
         null_slice()
-    }
-}
-
-impl RefFromWasmAbi for str {
-    type Abi = <[u8] as RefFromWasmAbi>::Abi;
-    type Anchor = Box<str>;
-
-    #[inline]
-    unsafe fn ref_from_abi(js: Self::Abi) -> Self::Anchor {
-        mem::transmute::<Box<[u8]>, Box<str>>(<Box<[u8]>>::from_abi(js))
-    }
-}
-
-impl LongRefFromWasmAbi for str {
-    type Abi = <[u8] as RefFromWasmAbi>::Abi;
-    type Anchor = Box<str>;
-
-    #[inline]
-    unsafe fn long_ref_from_abi(js: Self::Abi) -> Self::Anchor {
-        Self::ref_from_abi(js)
     }
 }
 

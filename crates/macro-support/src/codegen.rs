@@ -332,11 +332,17 @@ impl ToTokens for ast::Struct {
             };
 
             #[automatically_derived]
-            impl #wasm_bindgen::convert::RefFromWasmAbi for #name {
+            impl #wasm_bindgen::convert::ArgAbi<#wasm_bindgen::convert::CallScoped> for &#name {
                 type Abi = #class_abi;
+                type Value = ();
                 type Anchor = #wasm_bindgen::__rt::RcRef<#name>;
+                type UnwindCheck = *const #name;
 
-                unsafe fn ref_from_abi(js: Self::Abi) -> Self::Anchor {
+                fn describe_arg() {
+                    #wasm_bindgen::convert::describe_ref_arg::<#name>();
+                }
+
+                unsafe fn arg_from_abi(js: Self::Abi) -> (Self::Value, Self::Anchor) {
                     use #wasm_bindgen::__rt::alloc::rc::Rc;
 
                     let js = js.into_ptr();
@@ -344,16 +350,54 @@ impl ToTokens for ast::Struct {
 
                     Rc::increment_strong_count(js);
                     let rc = Rc::from_raw(js);
-                    #wasm_bindgen::__rt::RcRef::new(rc)
+                    ((), #wasm_bindgen::__rt::RcRef::new(rc))
                 }
             }
 
             #[automatically_derived]
-            impl #wasm_bindgen::convert::RefMutFromWasmAbi for #name {
+            impl<'wbg> #wasm_bindgen::convert::ArgAbiProject<'wbg, #wasm_bindgen::convert::CallScoped> for &'wbg #name {
+                fn project(_value: Self::Value, anchor: &'wbg mut Self::Anchor) -> Self {
+                    &**anchor
+                }
+            }
+
+            #[automatically_derived]
+            impl #wasm_bindgen::convert::ArgAbi<#wasm_bindgen::convert::Anchored> for &#name {
                 type Abi = #class_abi;
+                type Value = ();
+                type Anchor = #wasm_bindgen::__rt::RcRef<#name>;
+                type UnwindCheck = *const #name;
+
+                fn describe_arg() {
+                    #wasm_bindgen::convert::describe_long_ref_arg::<#name>();
+                }
+
+                unsafe fn arg_from_abi(js: Self::Abi) -> (Self::Value, Self::Anchor) {
+                    <&#name as #wasm_bindgen::convert::ArgAbi<
+                        #wasm_bindgen::convert::CallScoped
+                    >>::arg_from_abi(js)
+                }
+            }
+
+            #[automatically_derived]
+            impl<'wbg> #wasm_bindgen::convert::ArgAbiProject<'wbg, #wasm_bindgen::convert::Anchored> for &'wbg #name {
+                fn project(_value: Self::Value, anchor: &'wbg mut Self::Anchor) -> Self {
+                    &**anchor
+                }
+            }
+
+            #[automatically_derived]
+            impl<S: #wasm_bindgen::convert::BorrowScope> #wasm_bindgen::convert::ArgAbi<S> for &mut #name {
+                type Abi = #class_abi;
+                type Value = ();
                 type Anchor = #wasm_bindgen::__rt::RcRefMut<#name>;
+                type UnwindCheck = *const #name;
 
-                unsafe fn ref_mut_from_abi(js: Self::Abi) -> Self::Anchor {
+                fn describe_arg() {
+                    #wasm_bindgen::convert::describe_ref_mut_arg::<#name>();
+                }
+
+                unsafe fn arg_from_abi(js: Self::Abi) -> (Self::Value, Self::Anchor) {
                     use #wasm_bindgen::__rt::alloc::rc::Rc;
 
                     let js = js.into_ptr();
@@ -361,17 +405,14 @@ impl ToTokens for ast::Struct {
 
                     Rc::increment_strong_count(js);
                     let rc = Rc::from_raw(js);
-                    #wasm_bindgen::__rt::RcRefMut::new(rc)
+                    ((), #wasm_bindgen::__rt::RcRefMut::new(rc))
                 }
             }
 
             #[automatically_derived]
-            impl #wasm_bindgen::convert::LongRefFromWasmAbi for #name {
-                type Abi = #class_abi;
-                type Anchor = #wasm_bindgen::__rt::RcRef<#name>;
-
-                unsafe fn long_ref_from_abi(js: Self::Abi) -> Self::Anchor {
-                    <Self as #wasm_bindgen::convert::RefFromWasmAbi>::ref_from_abi(js)
+            impl<'wbg, S: #wasm_bindgen::convert::BorrowScope> #wasm_bindgen::convert::ArgAbiProject<'wbg, S> for &'wbg mut #name {
+                fn project(_value: Self::Value, anchor: &'wbg mut Self::Anchor) -> Self {
+                    &mut **anchor
                 }
             }
 
@@ -646,6 +687,33 @@ impl ToTokens for ast::StructField {
     }
 }
 
+fn strip_ref_lifetime(ty: &syn::Type) -> syn::Type {
+    match ty {
+        syn::Type::Reference(reference) => {
+            let mut reference = reference.clone();
+            reference.lifetime = None;
+            syn::Type::Reference(reference)
+        }
+        _ => ty.clone(),
+    }
+}
+
+fn fresh_lifetime(generics: &syn::Generics, preferred: &str) -> syn::Lifetime {
+    let existing = generics
+        .lifetimes()
+        .map(|lifetime| lifetime.lifetime.ident.to_string())
+        .collect::<BTreeSet<_>>();
+
+    let mut name = preferred.to_string();
+    let mut i = 0;
+    while existing.contains(&name) {
+        i += 1;
+        name = format!("{preferred}{i}");
+    }
+
+    syn::Lifetime::new(&format!("'{name}"), Span::call_site())
+}
+
 impl TryToTokens for ast::Export {
     fn try_to_tokens(self: &ast::Export, into: &mut TokenStream) -> Result<(), Diagnostic> {
         let generated_name = self.rust_symbol();
@@ -658,24 +726,25 @@ impl TryToTokens for ast::Export {
         let name = &self.rust_name;
         let wasm_bindgen = &self.wasm_bindgen;
 
+        let scope = if self.function.r#async {
+            quote! { #wasm_bindgen::convert::Anchored }
+        } else {
+            quote! { #wasm_bindgen::convert::CallScoped }
+        };
+
         let offset = if self.method_self.is_some() {
             if matches!(self.method_self, Some(ast::MethodSelf::ByValue)) {
                 let class = self.rust_class.as_ref().unwrap();
                 args.push(quote! { me: <#class as #wasm_bindgen::convert::FromWasmAbi>::Abi });
             } else {
                 let class = self.rust_class.as_ref().unwrap();
-                let abi = match self.method_self {
-                    Some(ast::MethodSelf::RefMutable) => {
-                        quote! { <#class as #wasm_bindgen::convert::RefMutFromWasmAbi>::Abi }
-                    }
-                    Some(ast::MethodSelf::RefShared) => {
-                        if self.function.r#async {
-                            quote! { <#class as #wasm_bindgen::convert::LongRefFromWasmAbi>::Abi }
-                        } else {
-                            quote! { <#class as #wasm_bindgen::convert::RefFromWasmAbi>::Abi }
-                        }
-                    }
+                let receiver_ty = match self.method_self {
+                    Some(ast::MethodSelf::RefMutable) => quote! { &mut #class },
+                    Some(ast::MethodSelf::RefShared) => quote! { &#class },
                     _ => unreachable!(),
+                };
+                let abi = quote! {
+                    <#receiver_ty as #wasm_bindgen::convert::ArgAbi<#scope>>::Abi
                 };
                 args.push(quote! { me: #abi });
             }
@@ -706,6 +775,7 @@ impl TryToTokens for ast::Export {
             }
             Some(ast::MethodSelf::RefMutable) => {
                 let class = self.rust_class.as_ref().unwrap();
+                let receiver_ty = quote! { &mut #class };
                 arg_conversions.push(quote! {
                     // `&mut self` requires `Self: RefUnwindSafe` (logical
                     // unwind-safety): if the method panics partway through
@@ -718,39 +788,30 @@ impl TryToTokens for ast::Export {
                     // assertion rather than relying on closure capture
                     // inference.
                     #wasm_bindgen::__rt::ensure_ref_unwind_safe::<#class>();
-                    let mut me = unsafe {
-                        <#class as #wasm_bindgen::convert::RefMutFromWasmAbi>
-                            ::ref_mut_from_abi(me)
+                    let (me_value, mut me_anchor) = unsafe {
+                        <#receiver_ty as #wasm_bindgen::convert::ArgAbi<#scope>>
+                            ::arg_from_abi(me)
                     };
-                    let me = &mut *me;
+                    let me = <#receiver_ty as #wasm_bindgen::convert::ArgAbiProject<'_, #scope>>
+                        ::project(me_value, &mut me_anchor);
                 });
                 quote! { me.#name }
             }
             Some(ast::MethodSelf::RefShared) => {
                 let class = self.rust_class.as_ref().unwrap();
-                let (trait_, func, borrow) = if self.function.r#async {
-                    (
-                        quote!(LongRefFromWasmAbi),
-                        quote!(long_ref_from_abi),
-                        quote!(
-                            <<#class as #wasm_bindgen::convert::LongRefFromWasmAbi>
-                                ::Anchor as #wasm_bindgen::__rt::core::borrow::Borrow<#class>>
-                                ::borrow(&me)
-                        ),
-                    )
-                } else {
-                    (quote!(RefFromWasmAbi), quote!(ref_from_abi), quote!(&*me))
-                };
+                let receiver_ty = quote! { &#class };
                 arg_conversions.push(quote! {
                     // `&self` requires `Self: RefUnwindSafe` for the same
                     // reason as `&mut self` — a panic mid-method can leave
                     // interior-mutable state in a torn condition observable
                     // by subsequent calls.
                     #wasm_bindgen::__rt::ensure_ref_unwind_safe::<#class>();
-                    let me = unsafe {
-                        <#class as #wasm_bindgen::convert::#trait_>::#func(me)
+                    let (me_value, mut me_anchor) = unsafe {
+                        <#receiver_ty as #wasm_bindgen::convert::ArgAbi<#scope>>
+                            ::arg_from_abi(me)
                     };
-                    let me = #borrow;
+                    let me = <#receiver_ty as #wasm_bindgen::convert::ArgAbiProject<'_, #scope>>
+                        ::project(me_value, &mut me_anchor);
                 });
                 quote! { me.#name }
             }
@@ -762,7 +823,6 @@ impl TryToTokens for ast::Export {
 
         let mut argtys = Vec::new();
         for (i, arg) in self.function.arguments.iter().enumerate() {
-            argtys.push(&*arg.pat_type.ty);
             let i = i + offset;
             let ident = Ident::new(&format!("arg{i}"), Span::call_site());
             fn unwrap_nested_types(ty: &syn::Type) -> &syn::Type {
@@ -772,86 +832,26 @@ impl TryToTokens for ast::Export {
                     _ => ty,
                 }
             }
-            let ty = unwrap_nested_types(&arg.pat_type.ty);
+            let ty = strip_ref_lifetime(unwrap_nested_types(&arg.pat_type.ty));
+            let arg_abi = quote! { <#ty as #wasm_bindgen::convert::ArgAbi<#scope>> };
+            argtys.push(ty.clone());
 
-            match &ty {
-                syn::Type::Reference(syn::TypeReference {
-                    mutability: Some(_),
-                    elem,
-                    ..
-                }) => {
-                    let abi = quote! { <#elem as #wasm_bindgen::convert::RefMutFromWasmAbi>::Abi };
-                    let (prim_args, prim_names) = splat(wasm_bindgen, &ident, &abi);
-                    args.extend(prim_args);
-                    arg_conversions.push(quote! {
-                        // `&mut T` arg: same logical-unwind-safety check as
-                        // `&mut self` — `T` must be `RefUnwindSafe` so any
-                        // panic mid-call cannot leave torn interior state.
-                        #wasm_bindgen::__rt::ensure_ref_unwind_safe::<#elem>();
-                        let mut #ident = unsafe {
-                            <#elem as #wasm_bindgen::convert::RefMutFromWasmAbi>
-                                ::ref_mut_from_abi(
-                                    <#abi as #wasm_bindgen::convert::WasmAbi>::join(#(#prim_names),*)
-                                )
-                        };
-                        let #ident = &mut *#ident;
-                    });
-                }
-                syn::Type::Reference(syn::TypeReference { elem, .. }) => {
-                    if self.function.r#async {
-                        let abi =
-                            quote! { <#elem as #wasm_bindgen::convert::LongRefFromWasmAbi>::Abi };
-                        let (prim_args, prim_names) = splat(wasm_bindgen, &ident, &abi);
-                        args.extend(prim_args);
-                        arg_conversions.push(quote! {
-                            // `&T` arg in async export: enforce
-                            // `T: RefUnwindSafe` for the same reason.
-                            #wasm_bindgen::__rt::ensure_ref_unwind_safe::<#elem>();
-                            let #ident = unsafe {
-                                <#elem as #wasm_bindgen::convert::LongRefFromWasmAbi>
-                                    ::long_ref_from_abi(
-                                        <#abi as #wasm_bindgen::convert::WasmAbi>::join(#(#prim_names),*)
-                                    )
-                            };
-                            let #ident = <<#elem as #wasm_bindgen::convert::LongRefFromWasmAbi>
-                                ::Anchor as core::borrow::Borrow<#elem>>
-                                ::borrow(&#ident);
-                        });
-                    } else {
-                        let abi = quote! { <#elem as #wasm_bindgen::convert::RefFromWasmAbi>::Abi };
-                        let (prim_args, prim_names) = splat(wasm_bindgen, &ident, &abi);
-                        args.extend(prim_args);
-                        arg_conversions.push(quote! {
-                            // `&T` arg: enforce `T: RefUnwindSafe`.
-                            #wasm_bindgen::__rt::ensure_ref_unwind_safe::<#elem>();
-                            let #ident = unsafe {
-                                <#elem as #wasm_bindgen::convert::RefFromWasmAbi>
-                                    ::ref_from_abi(
-                                        <#abi as #wasm_bindgen::convert::WasmAbi>::join(#(#prim_names),*)
-                                    )
-                            };
-                            let #ident = &*#ident;
-                        });
-                    }
-                }
-                _ => {
-                    let abi = quote! { <#ty as #wasm_bindgen::convert::FromWasmAbi>::Abi };
-                    let (prim_args, prim_names) = splat(wasm_bindgen, &ident, &abi);
-                    args.extend(prim_args);
-                    arg_conversions.push(quote! {
-                        // Owned arg: consumed locally inside the catch-unwind
-                        // closure, so `UnwindSafe` (not `RefUnwindSafe`) is
-                        // the relevant property.
-                        #wasm_bindgen::__rt::ensure_unwind_safe::<#ty>();
-                        let #ident = unsafe {
-                            <#ty as #wasm_bindgen::convert::FromWasmAbi>
-                                ::from_abi(
-                                    <#abi as #wasm_bindgen::convert::WasmAbi>::join(#(#prim_names),*)
-                                )
-                        };
-                    });
-                }
-            }
+            let abi = quote! { #arg_abi::Abi };
+            let (prim_args, prim_names) = splat(wasm_bindgen, &ident, &abi);
+            args.extend(prim_args);
+            let value = Ident::new(&format!("value{i}"), Span::call_site());
+            let anchor = Ident::new(&format!("anchor{i}"), Span::call_site());
+            arg_conversions.push(quote! {
+                #wasm_bindgen::__rt::ensure_unwind_safe::<#arg_abi::UnwindCheck>();
+                #[allow(unused_mut)]
+                let (#value, mut #anchor) = unsafe {
+                    #arg_abi::arg_from_abi(
+                        <#abi as #wasm_bindgen::convert::WasmAbi>::join(#(#prim_names),*)
+                    )
+                };
+                let #ident = <#ty as #wasm_bindgen::convert::ArgAbiProject<'_, #scope>>
+                    ::project(#value, &mut #anchor);
+            });
             converted_arguments.push(quote! { #ident });
         }
         let syn_unit = syn::Type::Tuple(syn::TypeTuple {
@@ -1026,17 +1026,8 @@ impl TryToTokens for ast::Export {
 
         let describe_args: TokenStream = argtys
             .iter()
-            .map(|ty| match ty {
-                syn::Type::Reference(reference)
-                    if self.function.r#async && reference.mutability.is_none() =>
-                {
-                    let inner = &reference.elem;
-                    quote! {
-                        inform(LONGREF);
-                        <#inner as WasmDescribe>::describe();
-                    }
-                }
-                _ => quote! { <#ty as WasmDescribe>::describe(); },
+            .map(|ty| {
+                quote! { <#ty as #wasm_bindgen::convert::ArgAbi<#scope>>::describe_arg(); }
             })
             .collect();
 
@@ -1151,11 +1142,15 @@ impl TryToTokens for ast::ImportType {
         let class_generic_params = generics::generic_params(&self.generics);
         let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();
 
-        let type_params_with_bounds = generics::type_params_with_bounds(&self.generics);
-        let impl_generics_with_lifetime_a = if type_params_with_bounds.is_empty() {
-            quote! { <'a> }
-        } else {
-            quote! { <'a, #(#type_params_with_bounds),*> }
+        let ref_lifetime = fresh_lifetime(&self.generics, "__wbg");
+        let impl_generics_with_ref_lifetime = {
+            let mut generics = self.generics.clone();
+            generics.params.insert(
+                0,
+                syn::GenericParam::Lifetime(syn::LifetimeParam::new(ref_lifetime.clone())),
+            );
+            let (impl_generics, _, _) = generics.split_for_impl();
+            quote! { #impl_generics }
         };
 
         // For struct definitions, we need generics with defaults, so use params directly
@@ -1254,7 +1249,6 @@ impl TryToTokens for ast::ImportType {
                 use #wasm_bindgen::convert::TryFromJsValue;
                 use #wasm_bindgen::convert::{IntoWasmAbi, FromWasmAbi};
                 use #wasm_bindgen::convert::{OptionIntoWasmAbi, OptionFromWasmAbi};
-                use #wasm_bindgen::convert::{RefFromWasmAbi, LongRefFromWasmAbi};
                 use #wasm_bindgen::describe::WasmDescribe;
                 use #wasm_bindgen::{JsValue, JsCast};
                 use #wasm_bindgen::__rt::{core, marker::ErasableGeneric};
@@ -1285,7 +1279,7 @@ impl TryToTokens for ast::ImportType {
                 }
 
                 #[automatically_derived]
-                impl #impl_generics_with_lifetime_a OptionIntoWasmAbi for &'a #rust_name #ty_generics #where_clause {
+                impl #impl_generics_with_ref_lifetime OptionIntoWasmAbi for &#ref_lifetime #rust_name #ty_generics #where_clause {
                     #[inline]
                     fn none() -> Self::Abi {
                         0
@@ -1312,8 +1306,8 @@ impl TryToTokens for ast::ImportType {
                 }
 
                 #[automatically_derived]
-                impl #impl_generics_with_lifetime_a IntoWasmAbi for &'a #rust_name #ty_generics #where_clause {
-                    type Abi = <&'a JsValue as IntoWasmAbi>::Abi;
+                impl #impl_generics_with_ref_lifetime IntoWasmAbi for &#ref_lifetime #rust_name #ty_generics #where_clause {
+                    type Abi = <&#ref_lifetime JsValue as IntoWasmAbi>::Abi;
 
                     #[inline]
                     fn into_abi(self) -> Self::Abi {
@@ -1322,32 +1316,70 @@ impl TryToTokens for ast::ImportType {
                 }
 
                 #[automatically_derived]
-                impl #impl_generics RefFromWasmAbi for #rust_name #ty_generics #where_clause {
-                    type Abi = <JsValue as RefFromWasmAbi>::Abi;
+                impl #impl_generics #wasm_bindgen::convert::ArgAbi<#wasm_bindgen::convert::CallScoped> for &#rust_name #ty_generics #where_clause {
+                    type Abi = <&'static JsValue as #wasm_bindgen::convert::ArgAbi<
+                        #wasm_bindgen::convert::CallScoped
+                    >>::Abi;
+                    type Value = ();
                     type Anchor = core::mem::ManuallyDrop<#rust_name #ty_generics>;
+                    type UnwindCheck = *const #rust_name #ty_generics;
 
-                    #[inline]
-                    unsafe fn ref_from_abi(js: Self::Abi) -> Self::Anchor {
-                        let tmp = <JsValue as RefFromWasmAbi>::ref_from_abi(js);
-                        core::mem::ManuallyDrop::new(#rust_name {
-                            obj: core::mem::ManuallyDrop::into_inner(tmp).into(),
-                            #phantom_init
-                        })
+                    fn describe_arg() {
+                        #wasm_bindgen::convert::describe_ref_arg::<#rust_name #ty_generics>();
+                    }
+
+                    unsafe fn arg_from_abi(js: Self::Abi) -> (Self::Value, Self::Anchor) {
+                        let tmp = <&JsValue as #wasm_bindgen::convert::ArgAbi<
+                            #wasm_bindgen::convert::CallScoped
+                        >>::arg_from_abi(js).1;
+                        (
+                            (),
+                            core::mem::ManuallyDrop::new(#rust_name {
+                                obj: core::mem::ManuallyDrop::into_inner(tmp).into(),
+                                #phantom_init
+                            })
+                        )
                     }
                 }
 
                 #[automatically_derived]
-                impl #impl_generics LongRefFromWasmAbi for #rust_name #ty_generics #where_clause {
-                    type Abi = <JsValue as LongRefFromWasmAbi>::Abi;
-                    type Anchor = #rust_name #ty_generics;
+                impl #impl_generics_with_ref_lifetime #wasm_bindgen::convert::ArgAbiProject<#ref_lifetime, #wasm_bindgen::convert::CallScoped> for &#ref_lifetime #rust_name #ty_generics #where_clause {
+                    fn project(_value: Self::Value, anchor: &#ref_lifetime mut Self::Anchor) -> Self {
+                        &**anchor
+                    }
+                }
 
-                    #[inline]
-                    unsafe fn long_ref_from_abi(js: Self::Abi) -> Self::Anchor {
-                        let tmp = <JsValue as LongRefFromWasmAbi>::long_ref_from_abi(js);
-                        #rust_name {
-                            obj: tmp.into(),
-                            #phantom_init
-                        }
+                #[automatically_derived]
+                impl #impl_generics #wasm_bindgen::convert::ArgAbi<#wasm_bindgen::convert::Anchored> for &#rust_name #ty_generics #where_clause {
+                    type Abi = <&'static JsValue as #wasm_bindgen::convert::ArgAbi<
+                        #wasm_bindgen::convert::Anchored
+                    >>::Abi;
+                    type Value = ();
+                    type Anchor = #rust_name #ty_generics;
+                    type UnwindCheck = *const #rust_name #ty_generics;
+
+                    fn describe_arg() {
+                        #wasm_bindgen::convert::describe_long_ref_arg::<#rust_name #ty_generics>();
+                    }
+
+                    unsafe fn arg_from_abi(js: Self::Abi) -> (Self::Value, Self::Anchor) {
+                        let tmp = <&JsValue as #wasm_bindgen::convert::ArgAbi<
+                            #wasm_bindgen::convert::Anchored
+                        >>::arg_from_abi(js).1;
+                        (
+                            (),
+                            #rust_name {
+                                obj: tmp.into(),
+                                #phantom_init
+                            }
+                        )
+                    }
+                }
+
+                #[automatically_derived]
+                impl #impl_generics_with_ref_lifetime #wasm_bindgen::convert::ArgAbiProject<#ref_lifetime, #wasm_bindgen::convert::Anchored> for &#ref_lifetime #rust_name #ty_generics #where_clause {
+                    fn project(_value: Self::Value, anchor: &#ref_lifetime mut Self::Anchor) -> Self {
+                        &*anchor
                     }
                 }
 

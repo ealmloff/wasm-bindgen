@@ -166,23 +166,6 @@ pub(crate) fn generic_params(generics: &syn::Generics) -> Vec<(&Ident, Option<&s
         .collect()
 }
 
-/// Returns a vector of token streams representing generic type parameters with their bounds.
-/// For example, `<T: Clone, U: Display>` returns `[quote!(T: Clone), quote!(U: Display)]`.
-/// This is useful for constructing impl blocks that need to add lifetimes while preserving bounds.
-pub(crate) fn type_params_with_bounds(generics: &syn::Generics) -> Vec<proc_macro2::TokenStream> {
-    generics
-        .type_params()
-        .map(|tp| {
-            let ident = &tp.ident;
-            let bounds = &tp.bounds;
-            if bounds.is_empty() {
-                quote::quote! { #ident }
-            } else {
-                quote::quote! { #ident: #bounds }
-            }
-        })
-        .collect()
-}
 /// Obtain the generic bounds, both inline and where clauses together
 pub(crate) fn generic_bounds<'a>(generics: &'a syn::Generics) -> Vec<Cow<'a, syn::WherePredicate>> {
     let mut bounds = Vec::new();

@@ -309,6 +309,64 @@ note: the lifetime requirement is introduced here
    |                                                        ^^^^^^^^^^^
    = note: this error originates in the attribute macro `wasm_bindgen` (in Nightly builds, run with -Z macro-backtrace for more info)
 
+error[E0277]: the trait bound `&'a TypeWhereHigherRanked<T>: ArgAbi<CallScoped>` is not satisfied
+  --> ui-tests/generics-comprehensive.rs:28:1
+   |
+28 | #[wasm_bindgen]
+   | ^^^^^^^^^^^^^^^ the trait `ArgAbi<CallScoped>` is not implemented for `&'a TypeWhereHigherRanked<T>`
+   |
+note: required by a bound in `ArgAbiProject`
+  --> $WORKSPACE/src/convert/arg.rs
+   |
+   | pub trait ArgAbiProject<'a, S: BorrowScope>: ArgAbi<S> {
+   |                                              ^^^^^^^^^ required by this bound in `ArgAbiProject`
+   = note: this error originates in the attribute macro `wasm_bindgen` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider extending the `where` clause, but there might be an alternative better way to express this requirement
+   |
+46 |     pub type TypeWhereHigherRanked<T> where for<'a> T: Fn(&'a str), &'a TypeWhereHigherRanked<T>: ArgAbi<CallScoped>;
+   |                                                                   ++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0277]: the trait bound `&'a TypeWhereHigherRanked<T>: ArgAbi<CallScoped>` is not satisfied
+  --> ui-tests/generics-comprehensive.rs:28:1
+   |
+28 | #[wasm_bindgen]
+   | ^^^^^^^^^^^^^^^ the trait `ArgAbi<CallScoped>` is not implemented for `&'a TypeWhereHigherRanked<T>`
+   |
+   = note: this error originates in the attribute macro `wasm_bindgen` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider extending the `where` clause, but there might be an alternative better way to express this requirement
+   |
+46 |     pub type TypeWhereHigherRanked<T> where for<'a> T: Fn(&'a str), &'a TypeWhereHigherRanked<T>: ArgAbi<CallScoped>;
+   |                                                                   ++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0277]: the trait bound `&'a TypeWhereHigherRanked<T>: ArgAbi<Anchored>` is not satisfied
+  --> ui-tests/generics-comprehensive.rs:28:1
+   |
+28 | #[wasm_bindgen]
+   | ^^^^^^^^^^^^^^^ the trait `ArgAbi<Anchored>` is not implemented for `&'a TypeWhereHigherRanked<T>`
+   |
+note: required by a bound in `ArgAbiProject`
+  --> $WORKSPACE/src/convert/arg.rs
+   |
+   | pub trait ArgAbiProject<'a, S: BorrowScope>: ArgAbi<S> {
+   |                                              ^^^^^^^^^ required by this bound in `ArgAbiProject`
+   = note: this error originates in the attribute macro `wasm_bindgen` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider extending the `where` clause, but there might be an alternative better way to express this requirement
+   |
+46 |     pub type TypeWhereHigherRanked<T> where for<'a> T: Fn(&'a str), &'a TypeWhereHigherRanked<T>: ArgAbi<Anchored>;
+   |                                                                   ++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0277]: the trait bound `&'a TypeWhereHigherRanked<T>: ArgAbi<Anchored>` is not satisfied
+  --> ui-tests/generics-comprehensive.rs:28:1
+   |
+28 | #[wasm_bindgen]
+   | ^^^^^^^^^^^^^^^ the trait `ArgAbi<Anchored>` is not implemented for `&'a TypeWhereHigherRanked<T>`
+   |
+   = note: this error originates in the attribute macro `wasm_bindgen` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider extending the `where` clause, but there might be an alternative better way to express this requirement
+   |
+46 |     pub type TypeWhereHigherRanked<T> where for<'a> T: Fn(&'a str), &'a TypeWhereHigherRanked<T>: ArgAbi<Anchored>;
+   |                                                                   ++++++++++++++++++++++++++++++++++++++++++++++++
+
 error[E0277]: expected a `Fn(&'a str)` closure, found `wasm_bindgen::JsValue`
   --> ui-tests/generics-comprehensive.rs:46:14
    |

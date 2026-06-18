@@ -5,11 +5,13 @@
 
 #![allow(clippy::missing_safety_doc)]
 
+mod arg;
 mod closures;
 mod impls;
 mod slices;
 mod traits;
 
+pub use self::arg::*;
 pub use self::impls::*;
 pub use self::slices::{VectorRefIntoWasmAbi, WasmSlice};
 pub use self::traits::*;

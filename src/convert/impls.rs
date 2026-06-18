@@ -1,15 +1,15 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::char;
-use core::mem::{self, ManuallyDrop};
+use core::mem;
 use core::ptr::NonNull;
 
 use crate::__rt::marker::ErasableGeneric;
 use crate::__rt::{WasmSignedWordRepr, WasmWordRepr};
 use crate::convert::traits::{WasmAbi, WasmPrimitive};
 use crate::convert::{
-    FromWasmAbi, IntoWasmAbi, LongRefFromWasmAbi, OptionFromWasmAbi, OptionIntoWasmAbi,
-    RefFromWasmAbi, ReturnWasmAbi, TryFromJsValue, UpcastFrom,
+    FromWasmAbi, IntoWasmAbi, OptionFromWasmAbi, OptionIntoWasmAbi, RefFromWasmAbi, ReturnWasmAbi,
+    TryFromJsValue, UpcastFrom,
 };
 use crate::sys::Promising;
 use crate::sys::{JsOption, Undefined};
@@ -588,26 +588,6 @@ impl IntoWasmAbi for &JsValue {
     #[inline]
     fn into_abi(self) -> u32 {
         self.idx
-    }
-}
-
-impl RefFromWasmAbi for JsValue {
-    type Abi = u32;
-    type Anchor = ManuallyDrop<JsValue>;
-
-    #[inline]
-    unsafe fn ref_from_abi(js: u32) -> Self::Anchor {
-        ManuallyDrop::new(JsValue::_new(js))
-    }
-}
-
-impl LongRefFromWasmAbi for JsValue {
-    type Abi = u32;
-    type Anchor = JsValue;
-
-    #[inline]
-    unsafe fn long_ref_from_abi(js: u32) -> Self::Anchor {
-        Self::from_abi(js)
     }
 }
 
